@@ -18,3 +18,13 @@ async def health_check() -> dict[str, str]:
         "service": settings.app_name,
         "environment": settings.app_env,
     }
+
+
+@app.get("/")
+async def root() -> dict[str, str]:
+    """Return basic API information."""
+    return {
+        "name": settings.app_name,
+        "version": "0.1.0",
+        "status": "running",
+    }

@@ -1,37 +1,40 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
 
-class User(Base):
-    """Application user."""
+class Brand(Base):
+    """Brand managed by a SocialPilot user."""
 
-    __tablename__ = "users"
+    __tablename__ = "brands"
 
     id: Mapped[int] = mapped_column(
         primary_key=True,
         autoincrement=True,
     )
 
-    email: Mapped[str] = mapped_column(
-        String(255),
-        unique=True,
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
         index=True,
-        nullable=False,
     )
 
-    password_hash: Mapped[str] = mapped_column(
+    name: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
     )
 
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        default=True,
-        nullable=False,
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    website_url: Mapped[str | None] = mapped_column(
+        String(2048),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -47,8 +50,7 @@ class User(Base):
         nullable=False,
     )
 
-    brands = relationship(
-        "Brand",
-        back_populates="user",
-        cascade="all, delete-orphan",
+    user = relationship(
+        "User",
+        back_populates="brands",
     )

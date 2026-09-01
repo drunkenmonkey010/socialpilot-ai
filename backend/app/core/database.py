@@ -34,7 +34,3 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Provide a database session to FastAPI dependencies."""
     async with AsyncSessionLocal() as session:
         yield session
-
-
-# Import models after Base is defined so SQLAlchemy registers them.
-from app.models.user import User  # noqa: E402, F401

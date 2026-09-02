@@ -7,8 +7,6 @@ from app.core.database import Base
 
 
 class User(Base):
-    """Application user."""
-
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
@@ -49,6 +47,12 @@ class User(Base):
 
     brands = relationship(
         "Brand",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    social_accounts = relationship(
+        "SocialAccount",
         back_populates="user",
         cascade="all, delete-orphan",
     )

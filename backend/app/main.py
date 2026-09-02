@@ -3,7 +3,10 @@ from fastapi import FastAPI
 from app.api.routes.auth import router as auth_router
 from app.api.routes.brand import router as brand_router
 from app.api.routes.campaign import router as campaign_router
+from app.api.routes.instagram import router as instagram_router
+from app.api.routes.mastodon import router as mastodon_router
 from app.api.routes.post import router as post_router
+from app.api.routes.social_account import router as social_account_router
 from app.api.routes.user import router as user_router
 from app.core.config import settings
 
@@ -17,7 +20,6 @@ app = FastAPI(
 
 @app.get("/health")
 async def health_check() -> dict[str, str]:
-    """Return the current API health status."""
     return {
         "status": "healthy",
         "service": settings.app_name,
@@ -27,7 +29,6 @@ async def health_check() -> dict[str, str]:
 
 @app.get("/")
 async def root() -> dict[str, str]:
-    """Return basic API information."""
     return {
         "name": settings.app_name,
         "version": "0.1.0",
@@ -38,5 +39,8 @@ async def root() -> dict[str, str]:
 app.include_router(auth_router)
 app.include_router(brand_router)
 app.include_router(campaign_router)
+app.include_router(instagram_router)
+app.include_router(mastodon_router)
 app.include_router(post_router)
+app.include_router(social_account_router)
 app.include_router(user_router)

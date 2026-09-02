@@ -36,7 +36,7 @@ class UserRepository:
         )
 
         self.session.add(user)
-        await self.session.flush()
+        await self.session.commit()
         await self.session.refresh(user)
 
         return user
@@ -51,7 +51,7 @@ class UserRepository:
             if hasattr(user, field):
                 setattr(user, field, value)
 
-        await self.session.flush()
+        await self.session.commit()
         await self.session.refresh(user)
 
         return user
@@ -59,4 +59,4 @@ class UserRepository:
     async def delete(self, user: User) -> None:
         """Delete an existing user."""
         await self.session.delete(user)
-        await self.session.flush()
+        await self.session.commit()

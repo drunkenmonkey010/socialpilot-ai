@@ -5,26 +5,35 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import settings
-
-# Import Base now so future SQLAlchemy models are automatically registered.
 from app.core.database import Base
 from app import models  # noqa: F401
 
 
 config = context.config
 
+
 # Use the application's database URL instead of hardcoding it.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+#
+# Alembic uses Python's ConfigParser internally, where "%" has a
+# special meaning. Database URLs may contain percent-encoded values
+# such as "%40" for "@", so escape "%" before passing the URL to Alembic.
+config.set_main_option(
+    "sqlalchemy.url",
+    settings.database_url.replace("%", "%%"),
+)
+
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 
+# SQLAlchemy metadata containing all registered application models.
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     """Run migrations without establishing a database connection."""
+
     url = config.get_main_option("sqlalchemy.url")
 
     context.configure(
@@ -40,6 +49,7 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection) -> None:
     """Run migrations using an active database connection."""
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -52,6 +62,7 @@ def do_run_migrations(connection) -> None:
 
 async def run_async_migrations() -> None:
     """Create an async engine and execute migrations."""
+
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -66,6 +77,7 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations against the configured database."""
+
     import asyncio
 
     asyncio.run(run_async_migrations())

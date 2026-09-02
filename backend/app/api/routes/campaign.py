@@ -52,32 +52,10 @@ async def create_campaign(
     return campaign
 
 
-@router.get(
-    "/{campaign_id}",
-    response_model=CampaignResponse,
-)
-async def get_campaign(
-    campaign_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> CampaignResponse:
-    """Return a campaign owned by the current user."""
-
-    campaign = await CampaignService.get_campaign(
-        db,
-        campaign_id,
-        current_user.id,
-    )
-
-    if campaign is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Campaign not found",
-        )
-
-    return campaign
-
-
+# IMPORTANT:
+# Keep this route BEFORE /{campaign_id}.
+# Otherwise /campaigns/brand/1 could potentially be interpreted
+# as the campaign_id route.
 @router.get(
     "/brand/{brand_id}",
     response_model=list[CampaignResponse],
@@ -102,6 +80,32 @@ async def get_brand_campaigns(
         )
 
     return campaigns
+
+
+@router.get(
+    "/{campaign_id}",
+    response_model=CampaignResponse,
+)
+async def get_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> CampaignResponse:
+    """Return a campaign owned by the current user."""
+
+    campaign = await CampaignService.get_campaign(
+        db,
+        campaign_id,
+        current_user.id,
+    )
+
+    if campaign is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign not found",
+        )
+
+    return campaign
 
 
 @router.patch(
@@ -162,3 +166,5 @@ async def delete_campaign(
         db,
         campaign,
     )
+
+    return None

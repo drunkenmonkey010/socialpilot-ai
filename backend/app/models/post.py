@@ -6,36 +6,46 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
-class Campaign(Base):
-    """Campaign belonging to a brand."""
+class Post(Base):
+    """Social media post belonging to a campaign."""
 
-    __tablename__ = "campaigns"
+    __tablename__ = "posts"
 
     id: Mapped[int] = mapped_column(
         primary_key=True,
         autoincrement=True,
     )
 
-    brand_id: Mapped[int] = mapped_column(
-        ForeignKey("brands.id", ondelete="CASCADE"),
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    name: Mapped[str] = mapped_column(
-        String(255),
+    content: Mapped[str] = mapped_column(
+        Text,
         nullable=False,
     )
 
-    description: Mapped[str | None] = mapped_column(
-        Text,
-        nullable=True,
+    platform: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
     )
 
     status: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
         default="draft",
+    )
+
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -51,13 +61,7 @@ class Campaign(Base):
         nullable=False,
     )
 
-    brand = relationship(
-        "Brand",
-        back_populates="campaigns",
-    )
-
-    posts = relationship(
-        "Post",
-        back_populates="campaign",
-        cascade="all, delete-orphan",
+    campaign = relationship(
+        "Campaign",
+        back_populates="posts",
     )

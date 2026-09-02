@@ -8,10 +8,12 @@ autogeneration.
 
 from app.models.brand import Brand
 from app.models.campaign import Campaign
+from app.models.post import Post
 from app.models.user import User
 
 __all__ = [
     "User",
     "Brand",
     "Campaign",
+    "Post",
 ]

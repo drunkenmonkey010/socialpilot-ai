@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.api.routes.auth import router as auth_router
 from app.api.routes.brand import router as brand_router
 from app.api.routes.campaign import router as campaign_router
+from app.api.routes.post import router as post_router
 from app.api.routes.user import router as user_router
 from app.core.config import settings
 
@@ -37,4 +38,5 @@ async def root() -> dict[str, str]:
 app.include_router(auth_router)
 app.include_router(brand_router)
 app.include_router(campaign_router)
+app.include_router(post_router)
 app.include_router(user_router)

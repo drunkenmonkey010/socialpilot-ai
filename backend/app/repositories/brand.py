@@ -16,7 +16,7 @@ class BrandRepository:
         user_id: int,
         data: BrandCreate,
     ) -> Brand:
-        """Create a new brand for a specific user."""
+        """Create and persist a new brand for a specific user."""
 
         brand = Brand(
             user_id=user_id,
@@ -26,7 +26,7 @@ class BrandRepository:
         )
 
         self.session.add(brand)
-        await self.session.flush()
+        await self.session.commit()
         await self.session.refresh(brand)
 
         return brand
@@ -66,14 +66,14 @@ class BrandRepository:
         brand: Brand,
         data: BrandUpdate,
     ) -> Brand:
-        """Update an existing brand."""
+        """Update and persist an existing brand."""
 
         update_data = data.model_dump(exclude_unset=True)
 
         for field, value in update_data.items():
             setattr(brand, field, value)
 
-        await self.session.flush()
+        await self.session.commit()
         await self.session.refresh(brand)
 
         return brand
@@ -82,7 +82,7 @@ class BrandRepository:
         self,
         brand: Brand,
     ) -> None:
-        """Delete an existing brand."""
+        """Delete and persist removal of an existing brand."""
 
         await self.session.delete(brand)
-        await self.session.flush()
+        await self.session.commit()

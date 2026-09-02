@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 
-from app.core.config import settings
 from app.api.routes.brand import router as brand_router
 from app.api.routes.campaign import router as campaign_router
+from app.api.routes.user import router as user_router
+from app.core.config import settings
 
 
 app = FastAPI(
@@ -34,3 +35,4 @@ async def root() -> dict[str, str]:
 
 app.include_router(brand_router)
 app.include_router(campaign_router)
+app.include_router(user_router)

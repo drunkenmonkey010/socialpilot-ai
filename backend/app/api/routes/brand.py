@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies.auth import get_current_user
 from app.core.database import get_db
+from app.models.user import User
 from app.schemas.brand import BrandCreate, BrandResponse, BrandUpdate
 from app.services.brand import BrandService
 
@@ -20,9 +22,29 @@ router = APIRouter(
 async def create_brand(
     data: BrandCreate,
     session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     service = BrandService(session)
-    return await service.create_brand(data)
+
+    return await service.create_brand(
+        current_user.id,
+        data,
+    )
+
+
+@router.get(
+    "",
+    response_model=list[BrandResponse],
+)
+async def get_my_brands(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    service = BrandService(session)
+
+    return await service.get_user_brands(
+        current_user.id,
+    )
 
 
 @router.get(
@@ -32,10 +54,14 @@ async def create_brand(
 async def get_brand(
     brand_id: int,
     session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     service = BrandService(session)
 
-    brand = await service.get_brand(brand_id)
+    brand = await service.get_brand(
+        brand_id,
+        current_user.id,
+    )
 
     if brand is None:
         raise HTTPException(
@@ -46,18 +72,6 @@ async def get_brand(
     return brand
 
 
-@router.get(
-    "/user/{user_id}",
-    response_model=list[BrandResponse],
-)
-async def get_user_brands(
-    user_id: int,
-    session: AsyncSession = Depends(get_db),
-):
-    service = BrandService(session)
-    return await service.get_user_brands(user_id)
-
-
 @router.patch(
     "/{brand_id}",
     response_model=BrandResponse,
@@ -66,10 +80,15 @@ async def update_brand(
     brand_id: int,
     data: BrandUpdate,
     session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     service = BrandService(session)
 
-    brand = await service.update_brand(brand_id, data)
+    brand = await service.update_brand(
+        brand_id,
+        current_user.id,
+        data,
+    )
 
     if brand is None:
         raise HTTPException(
@@ -87,10 +106,14 @@ async def update_brand(
 async def delete_brand(
     brand_id: int,
     session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     service = BrandService(session)
 
-    deleted = await service.delete_brand(brand_id)
+    deleted = await service.delete_brand(
+        brand_id,
+        current_user.id,
+    )
 
     if not deleted:
         raise HTTPException(

@@ -11,11 +11,15 @@ class BrandRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, data: BrandCreate) -> Brand:
-        """Create a new brand."""
+    async def create(
+        self,
+        user_id: int,
+        data: BrandCreate,
+    ) -> Brand:
+        """Create a new brand for a specific user."""
 
         brand = Brand(
-            user_id=data.user_id,
+            user_id=user_id,
             name=data.name,
             description=data.description,
             website_url=data.website_url,
@@ -27,16 +31,26 @@ class BrandRepository:
 
         return brand
 
-    async def get_by_id(self, brand_id: int) -> Brand | None:
-        """Get a brand by its ID."""
+    async def get_by_id(
+        self,
+        brand_id: int,
+        user_id: int,
+    ) -> Brand | None:
+        """Get a brand only if it belongs to the specified user."""
 
         result = await self.session.execute(
-            select(Brand).where(Brand.id == brand_id)
+            select(Brand).where(
+                Brand.id == brand_id,
+                Brand.user_id == user_id,
+            )
         )
 
         return result.scalar_one_or_none()
 
-    async def get_by_user_id(self, user_id: int) -> list[Brand]:
+    async def get_by_user_id(
+        self,
+        user_id: int,
+    ) -> list[Brand]:
         """Get all brands belonging to a user."""
 
         result = await self.session.execute(
@@ -64,7 +78,10 @@ class BrandRepository:
 
         return brand
 
-    async def delete(self, brand: Brand) -> None:
+    async def delete(
+        self,
+        brand: Brand,
+    ) -> None:
         """Delete an existing brand."""
 
         await self.session.delete(brand)

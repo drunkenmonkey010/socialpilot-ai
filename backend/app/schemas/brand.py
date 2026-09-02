@@ -10,7 +10,7 @@ class BrandBase(BaseModel):
 
 
 class BrandCreate(BrandBase):
-    user_id: int
+    model_config = ConfigDict(extra="forbid")
 
 
 class BrandUpdate(BaseModel):

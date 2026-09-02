@@ -10,42 +10,71 @@ class BrandService:
     def __init__(self, session: AsyncSession):
         self.repository = BrandRepository(session)
 
-    async def create_brand(self, data: BrandCreate):
-        """Create a new brand."""
+    async def create_brand(
+        self,
+        user_id: int,
+        data: BrandCreate,
+    ):
+        """Create a new brand for the authenticated user."""
 
-        return await self.repository.create(data)
+        return await self.repository.create(user_id, data)
 
-    async def get_brand(self, brand_id: int):
-        """Get a brand by ID."""
+    async def get_brand(
+        self,
+        brand_id: int,
+        user_id: int,
+    ):
+        """Get a brand owned by the authenticated user."""
 
-        return await self.repository.get_by_id(brand_id)
+        return await self.repository.get_by_id(
+            brand_id,
+            user_id,
+        )
 
-    async def get_user_brands(self, user_id: int):
-        """Get all brands belonging to a user."""
+    async def get_user_brands(
+        self,
+        user_id: int,
+    ):
+        """Get all brands belonging to the authenticated user."""
 
         return await self.repository.get_by_user_id(user_id)
 
     async def update_brand(
         self,
         brand_id: int,
+        user_id: int,
         data: BrandUpdate,
     ):
-        """Update an existing brand."""
+        """Update a brand owned by the authenticated user."""
 
-        brand = await self.repository.get_by_id(brand_id)
+        brand = await self.repository.get_by_id(
+            brand_id,
+            user_id,
+        )
 
         if brand is None:
             return None
 
-        return await self.repository.update(brand, data)
+        return await self.repository.update(
+            brand,
+            data,
+        )
 
-    async def delete_brand(self, brand_id: int) -> bool:
-        """Delete an existing brand."""
+    async def delete_brand(
+        self,
+        brand_id: int,
+        user_id: int,
+    ) -> bool:
+        """Delete a brand owned by the authenticated user."""
 
-        brand = await self.repository.get_by_id(brand_id)
+        brand = await self.repository.get_by_id(
+            brand_id,
+            user_id,
+        )
 
         if brand is None:
             return False
 
         await self.repository.delete(brand)
+
         return True

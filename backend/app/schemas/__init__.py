@@ -13,3 +13,15 @@ __all__ = [
     "CampaignResponse",
     "CampaignUpdate",
 ]
+
+from app.schemas.brand import (
+    BrandCreate,
+    BrandResponse,
+    BrandUpdate,
+)
+
+__all__ = [
+    "BrandCreate",
+    "BrandResponse",
+    "BrandUpdate",
+]

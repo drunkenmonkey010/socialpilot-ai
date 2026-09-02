@@ -8,7 +8,9 @@ CampaignService, which in turn uses CampaignRepository for persistence.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.dependencies.auth import get_current_user
 from app.core.database import get_db
+from app.models.user import User
 from app.schemas.campaign import (
     CampaignCreate,
     CampaignResponse,
@@ -31,13 +33,21 @@ router = APIRouter(
 async def create_campaign(
     campaign_data: CampaignCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CampaignResponse:
-    """Create a new campaign."""
+    """Create a campaign under a brand owned by the current user."""
 
     campaign = await CampaignService.create_campaign(
         db,
+        current_user.id,
         campaign_data,
     )
+
+    if campaign is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Brand not found",
+        )
 
     return campaign
 
@@ -49,12 +59,14 @@ async def create_campaign(
 async def get_campaign(
     campaign_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CampaignResponse:
-    """Return a campaign by ID."""
+    """Return a campaign owned by the current user."""
 
     campaign = await CampaignService.get_campaign(
         db,
         campaign_id,
+        current_user.id,
     )
 
     if campaign is None:
@@ -73,13 +85,23 @@ async def get_campaign(
 async def get_brand_campaigns(
     brand_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> list[CampaignResponse]:
-    """Return all campaigns belonging to a brand."""
+    """Return campaigns from a brand owned by the current user."""
 
-    return await CampaignService.get_brand_campaigns(
+    campaigns = await CampaignService.get_brand_campaigns(
         db,
         brand_id,
+        current_user.id,
     )
+
+    if campaigns is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Brand not found",
+        )
+
+    return campaigns
 
 
 @router.patch(
@@ -90,12 +112,14 @@ async def update_campaign(
     campaign_id: int,
     campaign_data: CampaignUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CampaignResponse:
-    """Update an existing campaign."""
+    """Update a campaign only if the current user owns its brand."""
 
     campaign = await CampaignService.get_campaign(
         db,
         campaign_id,
+        current_user.id,
     )
 
     if campaign is None:
@@ -118,12 +142,14 @@ async def update_campaign(
 async def delete_campaign(
     campaign_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    """Delete an existing campaign."""
+    """Delete a campaign only if the current user owns its brand."""
 
     campaign = await CampaignService.get_campaign(
         db,
         campaign_id,
+        current_user.id,
     )
 
     if campaign is None:

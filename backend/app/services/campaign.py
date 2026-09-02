@@ -19,9 +19,19 @@ class CampaignService:
     @staticmethod
     async def create_campaign(
         db: AsyncSession,
+        user_id: int,
         campaign_data: CampaignCreate,
-    ) -> Campaign:
-        """Create and persist a new campaign."""
+    ) -> Campaign | None:
+        """Create a campaign only under a brand owned by the user."""
+
+        owns_brand = await CampaignRepository.brand_belongs_to_user(
+            db,
+            campaign_data.brand_id,
+            user_id,
+        )
+
+        if not owns_brand:
+            return None
 
         campaign = Campaign(
             brand_id=campaign_data.brand_id,
@@ -36,24 +46,37 @@ class CampaignService:
     async def get_campaign(
         db: AsyncSession,
         campaign_id: int,
+        user_id: int,
     ) -> Campaign | None:
-        """Retrieve a campaign by ID."""
+        """Retrieve a campaign only if the user owns its brand."""
 
-        return await CampaignRepository.get_by_id(
+        return await CampaignRepository.get_by_id_for_user(
             db,
             campaign_id,
+            user_id,
         )
 
     @staticmethod
     async def get_brand_campaigns(
         db: AsyncSession,
         brand_id: int,
-    ) -> list[Campaign]:
-        """Retrieve all campaigns belonging to a brand."""
+        user_id: int,
+    ) -> list[Campaign] | None:
+        """Retrieve campaigns only from a brand owned by the user."""
 
-        return await CampaignRepository.get_by_brand_id(
+        owns_brand = await CampaignRepository.brand_belongs_to_user(
             db,
             brand_id,
+            user_id,
+        )
+
+        if not owns_brand:
+            return None
+
+        return await CampaignRepository.get_by_brand_id_for_user(
+            db,
+            brand_id,
+            user_id,
         )
 
     @staticmethod
@@ -62,7 +85,7 @@ class CampaignService:
         campaign: Campaign,
         campaign_data: CampaignUpdate,
     ) -> Campaign:
-        """Apply requested changes to an existing campaign."""
+        """Apply requested changes to an existing owned campaign."""
 
         update_data = campaign_data.model_dump(
             exclude_unset=True,
@@ -81,7 +104,7 @@ class CampaignService:
         db: AsyncSession,
         campaign: Campaign,
     ) -> None:
-        """Delete an existing campaign."""
+        """Delete an existing owned campaign."""
 
         await CampaignRepository.delete(
             db,

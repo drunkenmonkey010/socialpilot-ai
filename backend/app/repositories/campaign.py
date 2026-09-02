@@ -8,6 +8,7 @@ Business rules belong in the service layer.
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.brand import Brand
 from app.models.campaign import Campaign
 
 
@@ -41,6 +42,25 @@ class CampaignRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_by_id_for_user(
+        db: AsyncSession,
+        campaign_id: int,
+        user_id: int,
+    ) -> Campaign | None:
+        """Return a campaign only if its brand belongs to the user."""
+
+        result = await db.execute(
+            select(Campaign)
+            .join(Brand, Campaign.brand_id == Brand.id)
+            .where(
+                Campaign.id == campaign_id,
+                Brand.user_id == user_id,
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+    @staticmethod
     async def get_by_brand_id(
         db: AsyncSession,
         brand_id: int,
@@ -54,6 +74,43 @@ class CampaignRepository:
         )
 
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_brand_id_for_user(
+        db: AsyncSession,
+        brand_id: int,
+        user_id: int,
+    ) -> list[Campaign]:
+        """Return campaigns only if the brand belongs to the user."""
+
+        result = await db.execute(
+            select(Campaign)
+            .join(Brand, Campaign.brand_id == Brand.id)
+            .where(
+                Campaign.brand_id == brand_id,
+                Brand.user_id == user_id,
+            )
+            .order_by(Campaign.created_at.desc())
+        )
+
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def brand_belongs_to_user(
+        db: AsyncSession,
+        brand_id: int,
+        user_id: int,
+    ) -> bool:
+        """Return whether a brand belongs to the specified user."""
+
+        result = await db.execute(
+            select(Brand.id).where(
+                Brand.id == brand_id,
+                Brand.user_id == user_id,
+            )
+        )
+
+        return result.scalar_one_or_none() is not None
 
     @staticmethod
     async def update(

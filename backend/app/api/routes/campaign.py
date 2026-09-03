@@ -16,6 +16,7 @@ from app.schemas.campaign import (
     CampaignResponse,
     CampaignUpdate,
 )
+from app.schemas.post import PostResponse
 from app.services.campaign import CampaignService
 
 
@@ -80,6 +81,40 @@ async def get_brand_campaigns(
         )
 
     return campaigns
+
+
+@router.post(
+    "/{campaign_id}/generate-post",
+    response_model=PostResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_campaign_post(
+    campaign_id: int,
+    platform: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
+    """
+    Generate an AI social media post for a campaign.
+
+    The generated post is saved as DRAFT and must pass through
+    human review before it can be scheduled or published.
+    """
+
+    post = await CampaignService.generate_post(
+        db,
+        campaign_id,
+        current_user.id,
+        platform,
+    )
+
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign not found",
+        )
+
+    return post
 
 
 @router.get(

@@ -48,6 +48,12 @@ class PostUpdate(BaseModel):
     scheduled_at: datetime | None = None
 
 
+class PostSchedule(BaseModel):
+    """Fields required to schedule a post."""
+
+    scheduled_at: datetime
+
+
 class PostResponse(BaseModel):
     """API response for a post."""
 

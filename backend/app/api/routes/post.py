@@ -14,6 +14,7 @@ from app.models.user import User
 from app.schemas.post import (
     PostCreate,
     PostResponse,
+    PostSchedule,
     PostUpdate,
 )
 from app.services.post import PostService
@@ -256,6 +257,7 @@ async def reject_post(
 )
 async def schedule_post(
     post_id: int,
+    schedule_data: PostSchedule,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PostResponse:
@@ -277,6 +279,7 @@ async def schedule_post(
         return await PostService.schedule_post(
             db,
             post,
+            schedule_data.scheduled_at,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -361,3 +364,5 @@ async def delete_post(
         db,
         post,
     )
+
+    return None

@@ -61,6 +61,35 @@ class CampaignRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
+    async def get_campaign_with_brand_for_user(
+        db: AsyncSession,
+        campaign_id: int,
+        user_id: int,
+    ) -> tuple[Campaign, Brand] | None:
+        """
+        Return a campaign and its brand only if the brand belongs
+        to the specified user.
+        """
+
+        result = await db.execute(
+            select(Campaign, Brand)
+            .join(Brand, Campaign.brand_id == Brand.id)
+            .where(
+                Campaign.id == campaign_id,
+                Brand.user_id == user_id,
+            )
+        )
+
+        row = result.one_or_none()
+
+        if row is None:
+            return None
+
+        campaign, brand = row
+
+        return campaign, brand
+
+    @staticmethod
     async def get_by_brand_id(
         db: AsyncSession,
         brand_id: int,

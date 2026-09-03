@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.mastodon.oauth import publish_mastodon_status
 from app.models.post import Post, PostStatus
-from app.models.social_account import SocialAccount
 from app.repositories.post import PostRepository
 from app.repositories.social_account import SocialAccountRepository
 from app.schemas.post import PostCreate, PostUpdate
@@ -111,9 +110,7 @@ class PostService:
         db: AsyncSession,
         post: Post,
     ) -> Post:
-        """
-        Submit a draft or rejected post for human review.
-        """
+        """Submit a draft or rejected post for human review."""
 
         if post.status not in PostService.EDITABLE_STATUSES:
             raise ValueError(
@@ -133,11 +130,7 @@ class PostService:
         db: AsyncSession,
         post: Post,
     ) -> Post:
-        """
-        Approve a post after human review.
-
-        This is the human-in-the-loop approval boundary.
-        """
+        """Approve a post after human review."""
 
         if post.status != PostStatus.PENDING_REVIEW.value:
             raise ValueError(
@@ -157,11 +150,7 @@ class PostService:
         db: AsyncSession,
         post: Post,
     ) -> Post:
-        """
-        Reject a post during human review.
-
-        Rejected posts can subsequently be edited and resubmitted.
-        """
+        """Reject a post during human review."""
 
         if post.status != PostStatus.PENDING_REVIEW.value:
             raise ValueError(
@@ -180,10 +169,9 @@ class PostService:
     async def schedule_post(
         db: AsyncSession,
         post: Post,
+        scheduled_at: datetime,
     ) -> Post:
-        """
-        Schedule an approved post for future publication.
-        """
+        """Schedule an approved post for future publication."""
 
         if post.status != PostStatus.APPROVED.value:
             raise ValueError(
@@ -191,11 +179,12 @@ class PostService:
                 f"Current status: '{post.status}'."
             )
 
-        if post.scheduled_at is None:
+        if scheduled_at <= datetime.now(timezone.utc):
             raise ValueError(
-                "A scheduled publication time is required."
+                "Scheduled publication time must be in the future."
             )
 
+        post.scheduled_at = scheduled_at
         post.status = PostStatus.SCHEDULED.value
 
         return await PostRepository.update(
@@ -204,30 +193,17 @@ class PostService:
         )
 
     @staticmethod
-    async def publish_post(
+    async def _publish_post(
         db: AsyncSession,
         post: Post,
         user_id: int,
     ) -> Post:
         """
-        Publish an approved post to its configured social platform.
+        Perform the actual platform publishing operation.
 
-        Human approval is mandatory before this method can execute.
-
-        Lifecycle:
-
-            APPROVED
-                ↓
-            PUBLISHING
-                ↓
-            PUBLISHED / FAILED
+        The caller is responsible for validating the workflow state
+        before calling this method.
         """
-
-        if post.status != PostStatus.APPROVED.value:
-            raise ValueError(
-                "Only approved posts can be published. "
-                f"Current status: '{post.status}'."
-            )
 
         platform = post.platform.lower().strip()
 
@@ -254,13 +230,6 @@ class PostService:
             raise ValueError(
                 "The connected Mastodon account is inactive."
             )
-
-        post.status = PostStatus.PUBLISHING.value
-
-        await PostRepository.update(
-            db,
-            post,
-        )
 
         try:
             mastodon_response = await publish_mastodon_status(
@@ -291,6 +260,102 @@ class PostService:
             )
 
             raise
+
+    @staticmethod
+    async def publish_post(
+        db: AsyncSession,
+        post: Post,
+        user_id: int,
+    ) -> Post:
+        """
+        Immediately publish an approved post.
+
+        Human approval is mandatory.
+
+        Lifecycle:
+
+            APPROVED
+                ↓
+            PUBLISHING
+                ↓
+            PUBLISHED / FAILED
+        """
+
+        if post.status != PostStatus.APPROVED.value:
+            raise ValueError(
+                "Only approved posts can be published. "
+                f"Current status: '{post.status}'."
+            )
+
+        post.status = PostStatus.PUBLISHING.value
+
+        await PostRepository.update(
+            db,
+            post,
+        )
+
+        return await PostService._publish_post(
+            db,
+            post,
+            user_id,
+        )
+
+    @staticmethod
+    async def publish_scheduled_post(
+        db: AsyncSession,
+        post: Post,
+        user_id: int,
+    ) -> Post:
+        """
+        Publish a scheduled post that has already been claimed
+        by the scheduler.
+
+        The scheduler performs:
+
+            SCHEDULED → PUBLISHING
+
+        before calling this method.
+
+        A post can only reach SCHEDULED through schedule_post(),
+        which requires APPROVED status. Therefore the scheduler
+        does not bypass the human approval gate.
+        """
+
+        if post.status != PostStatus.PUBLISHING.value:
+            raise ValueError(
+                "Scheduled post must be claimed before publishing. "
+                f"Current status: '{post.status}'."
+            )
+
+        if post.scheduled_at is None:
+            post.status = PostStatus.FAILED.value
+
+            await PostRepository.update(
+                db,
+                post,
+            )
+
+            raise ValueError(
+                "Scheduled post does not have a scheduled publication time."
+            )
+
+        if post.scheduled_at > datetime.now(timezone.utc):
+            post.status = PostStatus.FAILED.value
+
+            await PostRepository.update(
+                db,
+                post,
+            )
+
+            raise ValueError(
+                "Scheduled publication time has not been reached yet."
+            )
+
+        return await PostService._publish_post(
+            db,
+            post,
+            user_id,
+        )
 
     @staticmethod
     async def delete_post(

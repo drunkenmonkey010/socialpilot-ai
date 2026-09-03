@@ -9,8 +9,10 @@ containing HTTP-specific logic.
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.campaign import Campaign
+from app.models.post import Post, PostStatus
 from app.repositories.campaign import CampaignRepository
 from app.schemas.campaign import CampaignCreate, CampaignUpdate
+from app.services.ai_content import generate_social_post
 
 
 class CampaignService:
@@ -110,3 +112,53 @@ class CampaignService:
             db,
             campaign,
         )
+
+    @staticmethod
+    async def generate_post(
+        db: AsyncSession,
+        campaign_id: int,
+        user_id: int,
+        platform: str,
+    ) -> Post | None:
+        """
+        Generate an AI social media post for a campaign.
+
+        The campaign and brand are verified against the current user
+        before any AI generation occurs.
+
+        The generated post is always saved as DRAFT so that it must
+        pass through the existing human review workflow.
+        """
+
+        campaign_data = (
+            await CampaignRepository.get_campaign_with_brand_for_user(
+                db,
+                campaign_id,
+                user_id,
+            )
+        )
+
+        if campaign_data is None:
+            return None
+
+        campaign, brand = campaign_data
+
+        content = await generate_social_post(
+            brand=brand,
+            campaign=campaign,
+            platform=platform,
+        )
+
+        post = Post(
+            campaign_id=campaign.id,
+            content=content,
+            platform=platform,
+            status=PostStatus.DRAFT.value,
+        )
+
+        db.add(post)
+
+        await db.commit()
+        await db.refresh(post)
+
+        return post

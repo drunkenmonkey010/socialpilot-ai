@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.post import PostStatus
+
 
 class PostBase(BaseModel):
     """Shared fields for social media posts."""
@@ -17,15 +19,7 @@ class PostBase(BaseModel):
         max_length=50,
     )
 
-    status: str = Field(
-        default="draft",
-        min_length=1,
-        max_length=50,
-    )
-
     scheduled_at: datetime | None = None
-
-    published_at: datetime | None = None
 
 
 class PostCreate(PostBase):
@@ -38,7 +32,7 @@ class PostCreate(PostBase):
 
 
 class PostUpdate(BaseModel):
-    """Fields that can be updated on a post."""
+    """Fields that can be edited while a post is in an editable state."""
 
     content: str | None = Field(
         default=None,
@@ -51,18 +45,10 @@ class PostUpdate(BaseModel):
         max_length=50,
     )
 
-    status: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=50,
-    )
-
     scheduled_at: datetime | None = None
 
-    published_at: datetime | None = None
 
-
-class PostResponse(PostBase):
+class PostResponse(BaseModel):
     """API response for a post."""
 
     model_config = ConfigDict(
@@ -71,5 +57,10 @@ class PostResponse(PostBase):
 
     id: int
     campaign_id: int
+    content: str
+    platform: str
+    status: PostStatus
+    scheduled_at: datetime | None
+    published_at: datetime | None
     created_at: datetime
     updated_at: datetime

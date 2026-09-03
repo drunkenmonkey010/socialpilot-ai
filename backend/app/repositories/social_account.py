@@ -13,7 +13,6 @@ class SocialAccountRepository:
         social_account: SocialAccount,
     ) -> SocialAccount:
         db.add(social_account)
-
         await db.commit()
         await db.refresh(social_account)
 
@@ -48,28 +47,6 @@ class SocialAccountRepository:
         return result.scalar_one_or_none()
 
     @staticmethod
-    async def get_by_platform_and_account_id(
-        db: AsyncSession,
-        user_id: int,
-        platform: str,
-        account_id: str,
-    ) -> SocialAccount | None:
-        """
-        Find a social account belonging to a specific user
-        using its platform and platform-specific account ID.
-        """
-
-        result = await db.execute(
-            select(SocialAccount).where(
-                SocialAccount.user_id == user_id,
-                SocialAccount.platform == platform,
-                SocialAccount.account_id == account_id,
-            )
-        )
-
-        return result.scalar_one_or_none()
-
-    @staticmethod
     async def get_by_user_id(
         db: AsyncSession,
         user_id: int,
@@ -85,6 +62,40 @@ class SocialAccountRepository:
         )
 
         return list(result.scalars().all())
+
+    @staticmethod
+    async def get_by_platform_and_account_id(
+        db: AsyncSession,
+        platform: str,
+        account_id: str,
+    ) -> SocialAccount | None:
+        result = await db.execute(
+            select(SocialAccount).where(
+                SocialAccount.platform == platform,
+                SocialAccount.account_id == account_id,
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_by_platform_for_user(
+        db: AsyncSession,
+        platform: str,
+        user_id: int,
+    ) -> SocialAccount | None:
+        result = await db.execute(
+            select(SocialAccount).where(
+                SocialAccount.platform == platform,
+                SocialAccount.user_id == user_id,
+                SocialAccount.is_active.is_(True),
+            )
+            .order_by(
+                SocialAccount.created_at.desc()
+            )
+        )
+
+        return result.scalars().first()
 
     @staticmethod
     async def update(

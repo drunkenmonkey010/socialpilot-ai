@@ -17,6 +17,10 @@ MASTODON_VERIFY_CREDENTIALS_URL = (
     f"{settings.mastodon_instance_url}/api/v1/accounts/verify_credentials"
 )
 
+MASTODON_STATUS_URL = (
+    f"{settings.mastodon_instance_url}/api/v1/statuses"
+)
+
 
 def get_mastodon_authorization_url(state: str) -> str:
     """
@@ -24,7 +28,9 @@ def get_mastodon_authorization_url(state: str) -> str:
     """
 
     if not settings.mastodon_client_id:
-        raise ValueError("Mastodon Client ID is not configured.")
+        raise ValueError(
+            "Mastodon Client ID is not configured."
+        )
 
     params = {
         "client_id": settings.mastodon_client_id,
@@ -43,10 +49,14 @@ async def exchange_code_for_token(code: str) -> dict:
     """
 
     if not settings.mastodon_client_id:
-        raise ValueError("Mastodon Client ID is not configured.")
+        raise ValueError(
+            "Mastodon Client ID is not configured."
+        )
 
     if not settings.mastodon_client_secret:
-        raise ValueError("Mastodon Client Secret is not configured.")
+        raise ValueError(
+            "Mastodon Client Secret is not configured."
+        )
 
     payload = {
         "client_id": settings.mastodon_client_id,
@@ -68,14 +78,16 @@ async def exchange_code_for_token(code: str) -> dict:
 
     if response.is_error:
         raise RuntimeError(
-            f"Mastodon token exchange failed: "
+            "Mastodon token exchange failed: "
             f"{response.status_code} {response.text}"
         )
 
     return response.json()
 
 
-async def get_mastodon_account(access_token: str) -> dict:
+async def get_mastodon_account(
+    access_token: str,
+) -> dict:
     """
     Retrieve the currently authenticated Mastodon account.
     """
@@ -91,7 +103,50 @@ async def get_mastodon_account(access_token: str) -> dict:
 
     if response.is_error:
         raise RuntimeError(
-            f"Mastodon account lookup failed: "
+            "Mastodon account lookup failed: "
+            f"{response.status_code} {response.text}"
+        )
+
+    return response.json()
+
+
+async def publish_mastodon_status(
+    access_token: str,
+    content: str,
+) -> dict:
+    """
+    Publish a text status to Mastodon.
+
+    Returns the Mastodon status object returned by the API.
+    """
+
+    if not access_token:
+        raise ValueError(
+            "Mastodon access token is required."
+        )
+
+    if not content.strip():
+        raise ValueError(
+            "Mastodon status content cannot be empty."
+        )
+
+    payload = {
+        "status": content,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            MASTODON_STATUS_URL,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+        )
+
+    if response.is_error:
+        raise RuntimeError(
+            "Mastodon status publication failed: "
             f"{response.status_code} {response.text}"
         )
 

@@ -128,11 +128,210 @@ async def update_post(
             detail="Post not found",
         )
 
-    return await PostService.update_post(
+    try:
+        return await PostService.update_post(
+            db,
+            post,
+            post_data,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+
+
+@router.post(
+    "/{post_id}/submit-review",
+    response_model=PostResponse,
+)
+async def submit_post_for_review(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
+    """Submit a draft or rejected post for human review."""
+
+    post = await PostService.get_post(
         db,
-        post,
-        post_data,
+        post_id,
+        current_user.id,
     )
+
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found",
+        )
+
+    try:
+        return await PostService.submit_for_review(
+            db,
+            post,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+
+
+@router.post(
+    "/{post_id}/approve",
+    response_model=PostResponse,
+)
+async def approve_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
+    """
+    Approve a post after human review.
+
+    This endpoint represents the human-in-the-loop approval boundary.
+    """
+
+    post = await PostService.get_post(
+        db,
+        post_id,
+        current_user.id,
+    )
+
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found",
+        )
+
+    try:
+        return await PostService.approve_post(
+            db,
+            post,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+
+
+@router.post(
+    "/{post_id}/reject",
+    response_model=PostResponse,
+)
+async def reject_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
+    """Reject a post during human review."""
+
+    post = await PostService.get_post(
+        db,
+        post_id,
+        current_user.id,
+    )
+
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found",
+        )
+
+    try:
+        return await PostService.reject_post(
+            db,
+            post,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+
+
+@router.post(
+    "/{post_id}/schedule",
+    response_model=PostResponse,
+)
+async def schedule_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
+    """Schedule an approved post for future publication."""
+
+    post = await PostService.get_post(
+        db,
+        post_id,
+        current_user.id,
+    )
+
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found",
+        )
+
+    try:
+        return await PostService.schedule_post(
+            db,
+            post,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+
+
+@router.post(
+    "/{post_id}/publish",
+    response_model=PostResponse,
+)
+async def publish_post(
+    post_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PostResponse:
+    """
+    Publish an approved post to its connected social platform.
+
+    Publishing is intentionally restricted to APPROVED posts.
+    This prevents drafts or posts awaiting human review from
+    reaching the external platform.
+    """
+
+    post = await PostService.get_post(
+        db,
+        post_id,
+        current_user.id,
+    )
+
+    if post is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found",
+        )
+
+    try:
+        return await PostService.publish_post(
+            db,
+            post,
+            current_user.id,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
 
 
 @router.delete(

@@ -1,9 +1,23 @@
 from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+
+class PostStatus(str, Enum):
+    """Allowed lifecycle states for a social media post."""
+
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SCHEDULED = "scheduled"
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    FAILED = "failed"
 
 
 class Post(Base):
@@ -35,7 +49,7 @@ class Post(Base):
     status: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        default="draft",
+        default=PostStatus.DRAFT.value,
     )
 
     scheduled_at: Mapped[datetime | None] = mapped_column(

@@ -1,10 +1,3 @@
-"""
-Redis queue integration.
-
-Redis is used as the job queue and coordination layer.
-PostgreSQL remains the source of truth for post state.
-"""
-
 import json
 import os
 from typing import Any
@@ -18,25 +11,28 @@ REDIS_URL = os.getenv(
 )
 
 SCHEDULED_POST_QUEUE = "socialpilot:scheduled_posts"
+SCHEDULED_POST_PROCESSING_QUEUE = "socialpilot:scheduled_posts:processing"
 
 
 class RedisQueue:
-    """Async Redis queue for SocialPilot background jobs."""
-
     def __init__(
         self,
         redis_url: str = REDIS_URL,
         queue_name: str = SCHEDULED_POST_QUEUE,
-    ) -> None:
+        processing_queue_name: str = SCHEDULED_POST_PROCESSING_QUEUE,
+    ):
         self.redis_url = redis_url
         self.queue_name = queue_name
+        self.processing_queue_name = processing_queue_name
+
         self.client = redis.from_url(
             self.redis_url,
             decode_responses=True,
+            socket_timeout=None,
+            socket_connect_timeout=5,
         )
 
     async def ping(self) -> bool:
-        """Check whether Redis is reachable."""
         return bool(await self.client.ping())
 
     async def enqueue_scheduled_post(
@@ -44,8 +40,6 @@ class RedisQueue:
         post_id: int,
         user_id: int,
     ) -> None:
-        """Add a scheduled-post job to the Redis queue."""
-
         job = {
             "post_id": post_id,
             "user_id": user_id,
@@ -58,28 +52,67 @@ class RedisQueue:
 
     async def dequeue_scheduled_post(
         self,
-        timeout: int = 0,
+        timeout: int = 5,
     ) -> dict[str, Any] | None:
         """
-        Remove and return the next scheduled-post job.
+        Move one job from the main queue to the processing queue.
 
-        timeout=0 means wait indefinitely for a job.
+        BRPOPLPUSH gives us a basic acknowledgement/recovery mechanism:
+        the job remains in the processing queue while the worker handles it.
         """
 
-        result = await self.client.blpop(
+        raw_job = await self.client.brpoplpush(
             self.queue_name,
+            self.processing_queue_name,
             timeout=timeout,
         )
 
-        if result is None:
+        if raw_job is None:
             return None
-
-        _, raw_job = result
 
         return json.loads(raw_job)
 
+    async def acknowledge_scheduled_post(
+        self,
+        post_id: int,
+        user_id: int,
+    ) -> bool:
+        """
+        Remove a successfully processed job from the processing queue.
+        """
+
+        job = {
+            "post_id": post_id,
+            "user_id": user_id,
+        }
+
+        removed = await self.client.lrem(
+            self.processing_queue_name,
+            1,
+            json.dumps(job),
+        )
+
+        return removed > 0
+
+    async def get_processing_jobs(self) -> list[dict[str, Any]]:
+        """
+        Return jobs currently being processed.
+
+        These jobs can be inspected for recovery if a worker crashes.
+        """
+
+        raw_jobs = await self.client.lrange(
+            self.processing_queue_name,
+            0,
+            -1,
+        )
+
+        return [
+            json.loads(raw_job)
+            for raw_job in raw_jobs
+        ]
+
     async def close(self) -> None:
-        """Close the Redis connection."""
         await self.client.aclose()
 
 

@@ -1,12 +1,3 @@
-"""
-Redis publishing worker.
-
-Consumes scheduled-post jobs from Redis and publishes them
-through the existing PostService.
-
-PostgreSQL remains the source of truth for post state.
-"""
-
 import asyncio
 import logging
 
@@ -20,92 +11,62 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-logger = logging.getLogger("socialpilot.publisher")
+logger = logging.getLogger(__name__)
 
 
 async def process_job(job: dict) -> None:
-    """
-    Process one scheduled-post job from Redis.
-    """
-
     post_id = job.get("post_id")
     user_id = job.get("user_id")
 
-    if post_id is None or user_id is None:
-        logger.error(
-            "Invalid Redis job: %s",
-            job,
-        )
+    if not isinstance(post_id, int) or not isinstance(user_id, int):
+        logger.error("Invalid Redis job: %s", job)
         return
 
     async with AsyncSessionLocal() as db:
-        try:
-            post = await PostService.get_post(
-                db,
+        post = await PostService.get_post(
+            db,
+            post_id,
+            user_id,
+        )
+
+        if post is None:
+            logger.error(
+                "Post not found for Redis job: post_id=%s user_id=%s",
                 post_id,
                 user_id,
             )
+            return
 
-            if post is None:
-                logger.error(
-                    "Post not found for Redis job: post_id=%s user_id=%s",
-                    post_id,
-                    user_id,
-                )
-                return
+        logger.info(
+            "Processing Redis publishing job: "
+            "post_id=%s user_id=%s platform=%s status=%s",
+            post.id,
+            user_id,
+            post.platform,
+            post.status,
+        )
 
-            logger.info(
-                "Processing Redis publishing job: "
-                "post_id=%s user_id=%s platform=%s status=%s",
+        if post.status != "publishing":
+            logger.warning(
+                "Skipping Redis job because post is not in publishing state: "
+                "post_id=%s status=%s",
                 post.id,
-                user_id,
-                post.platform,
                 post.status,
             )
+            return
 
-            if post.status != "publishing":
-                logger.warning(
-                    "Post is not in publishing state. "
-                    "Skipping: post_id=%s status=%s",
-                    post.id,
-                    post.status,
-                )
-                return
-
-            published_post = await PostService.publish_scheduled_post(
-                db,
-                post,
-                user_id,
-            )
-
-            logger.info(
-                "Redis job completed successfully: "
-                "post_id=%s platform=%s published_at=%s",
-                published_post.id,
-                published_post.platform,
-                published_post.published_at,
-            )
-
-        except Exception:
-            logger.exception(
-                "Failed to process Redis publishing job: "
-                "post_id=%s user_id=%s",
-                post_id,
-                user_id,
-            )
+        await PostService.publish_scheduled_post(
+            db,
+            post,
+            user_id,
+        )
 
 
-async def worker_loop() -> None:
-    """
-    Continuously consume scheduled-post jobs from Redis.
-    """
+async def worker() -> None:
+    logger.info("SocialPilot Redis publishing worker started.")
 
-    logger.info(
-        "SocialPilot Redis publishing worker started."
-    )
-
-    while True:
-        try:
+    try:
+        while True:
             job = await redis_queue.dequeue_scheduled_post(
                 timeout=5,
             )
@@ -113,34 +74,44 @@ async def worker_loop() -> None:
             if job is None:
                 continue
 
-            logger.info(
-                "Received Redis job: %s",
-                job,
+            logger.info("Received Redis job: %s", job)
+
+            try:
+                await process_job(job)
+
+            except Exception:
+                logger.exception(
+                    "Redis job failed and remains in processing queue: %s",
+                    job,
+                )
+                continue
+
+            acknowledged = await redis_queue.acknowledge_scheduled_post(
+                post_id=job["post_id"],
+                user_id=job["user_id"],
             )
 
-            await process_job(job)
+            if acknowledged:
+                logger.info(
+                    "Redis job acknowledged successfully: "
+                    "post_id=%s user_id=%s",
+                    job["post_id"],
+                    job["user_id"],
+                )
+            else:
+                logger.warning(
+                    "Redis job could not be acknowledged: %s",
+                    job,
+                )
 
-        except asyncio.CancelledError:
-            logger.info(
-                "Redis publishing worker cancelled."
-            )
-            raise
+    except asyncio.CancelledError:
+        logger.info("Redis publishing worker cancelled.")
+        raise
 
-        except Exception:
-            logger.exception(
-                "Unexpected error in Redis publishing worker."
-            )
-
-            # Prevent a tight error loop if Redis temporarily fails.
-            await asyncio.sleep(2)
-
-
-async def main() -> None:
-    try:
-        await worker_loop()
     finally:
         await redis_queue.close()
+        logger.info("Redis publishing worker stopped.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(worker())

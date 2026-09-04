@@ -71,8 +71,6 @@ class RedisQueue:
 
         updated_job = json.dumps(job)
 
-        # Replace the old entry in the processing queue with the
-        # timestamped version.
         await self.client.lrem(
             self.processing_queue_name,
             1,
@@ -133,56 +131,63 @@ class RedisQueue:
 
         return jobs
 
-    async def recover_stale_jobs(
+    async def recover_scheduled_post(
         self,
+        post_id: int,
+        user_id: int,
         stale_after_seconds: int = 300,
-    ) -> list[dict[str, Any]]:
+    ) -> bool:
         """
-        Move stale jobs from the processing queue back to the main queue.
+        Recover one specific stale scheduled-post job.
 
-        A job is considered stale when its claimed_at timestamp is older
-        than stale_after_seconds.
+        The caller is responsible for checking the PostgreSQL state
+        before calling this method.
         """
+
+        processing_jobs = await self.client.lrange(
+            self.processing_queue_name,
+            0,
+            -1,
+        )
 
         now = datetime.now(timezone.utc)
 
-        processing_jobs = await self.get_processing_jobs()
+        for raw_job in processing_jobs:
+            try:
+                job = json.loads(raw_job)
+            except json.JSONDecodeError:
+                continue
 
-        recovered_jobs: list[dict[str, Any]] = []
+            if (
+                job.get("post_id") != post_id
+                or job.get("user_id") != user_id
+            ):
+                continue
 
-        for job in processing_jobs:
             claimed_at_raw = job.get("claimed_at")
 
             if not claimed_at_raw:
-                continue
+                return False
 
             try:
                 claimed_at = datetime.fromisoformat(
-                    claimed_at_raw
+                    claimed_at_raw,
                 )
 
                 if claimed_at.tzinfo is None:
                     claimed_at = claimed_at.replace(
-                        tzinfo=timezone.utc
+                        tzinfo=timezone.utc,
                     )
 
             except ValueError:
-                continue
+                return False
 
             age_seconds = (
                 now - claimed_at
             ).total_seconds()
 
             if age_seconds < stale_after_seconds:
-                continue
-
-            post_id = job.get("post_id")
-            user_id = job.get("user_id")
-
-            if not isinstance(post_id, int) or not isinstance(user_id, int):
-                continue
-
-            raw_job = json.dumps(job)
+                return False
 
             removed = await self.client.lrem(
                 self.processing_queue_name,
@@ -191,9 +196,8 @@ class RedisQueue:
             )
 
             if removed == 0:
-                continue
+                return False
 
-            # Reset the claim timestamp before retrying.
             recovered_job = {
                 "post_id": post_id,
                 "user_id": user_id,
@@ -205,9 +209,9 @@ class RedisQueue:
                 json.dumps(recovered_job),
             )
 
-            recovered_jobs.append(recovered_job)
+            return True
 
-        return recovered_jobs
+        return False
 
     async def close(self) -> None:
         await self.client.aclose()

@@ -1,9 +1,22 @@
+"""
+Database-backed scheduler for SocialPilot AI.
+
+The scheduler:
+1. Finds scheduled posts whose time has arrived.
+2. Atomically claims each post.
+3. Pushes the claimed post to Redis.
+4. Leaves actual publishing to the Redis publisher worker.
+
+PostgreSQL remains the source of truth for post state.
+"""
+
 import asyncio
 import logging
 
 from app.core.database import AsyncSessionLocal
+from app.integrations.queue.redis import redis_queue
 from app.repositories.post import PostRepository
-from app.services.post import PostService
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,11 +30,10 @@ POLL_INTERVAL_SECONDS = 5
 
 async def process_scheduled_posts() -> None:
     """
-    Find scheduled posts whose publication time has arrived,
-    atomically claim them, and publish them.
+    Find due scheduled posts, claim them, and enqueue them in Redis.
     """
 
-    # First session: discover posts that are due.
+    # Discover due posts using a short-lived database session.
     async with AsyncSessionLocal() as db:
         due_posts = await PostRepository.get_due_scheduled_posts(db)
 
@@ -29,16 +41,14 @@ async def process_scheduled_posts() -> None:
         return
 
     for post, user_id in due_posts:
-        # Use a fresh session for each post so one failure does not
-        # interfere with processing other scheduled posts.
         async with AsyncSessionLocal() as db:
             try:
-                # Atomically change:
+                # Atomically transition:
                 #
                 # SCHEDULED -> PUBLISHING
                 #
-                # If another worker already claimed this post,
-                # this returns None and we skip it.
+                # This prevents multiple scheduler instances from
+                # claiming the same post.
                 claimed_post = await PostRepository.claim_scheduled_post(
                     db,
                     post.id,
@@ -61,29 +71,29 @@ async def process_scheduled_posts() -> None:
                     claimed_post.scheduled_at,
                 )
 
-                # Publish the claimed post.
-                published_post = await PostService.publish_scheduled_post(
-                    db,
-                    claimed_post,
-                    user_id,
+                # Put the claimed publishing job into Redis.
+                await redis_queue.enqueue_scheduled_post(
+                    post_id=claimed_post.id,
+                    user_id=user_id,
                 )
 
                 logger.info(
-                    "Scheduled post published successfully: "
-                    "post_id=%s platform=%s published_at=%s",
-                    published_post.id,
-                    published_post.platform,
-                    published_post.published_at,
+                    "Scheduled post queued in Redis: "
+                    "post_id=%s user_id=%s",
+                    claimed_post.id,
+                    user_id,
                 )
 
             except Exception:
                 logger.exception(
-                    "Failed to publish scheduled post: post_id=%s",
+                    "Failed to queue scheduled post: post_id=%s",
                     post.id,
                 )
 
 
 async def scheduler_loop() -> None:
+    """Continuously scan PostgreSQL for due scheduled posts."""
+
     logger.info(
         "SocialPilot scheduler started. Poll interval: %s seconds.",
         POLL_INTERVAL_SECONDS,
@@ -92,6 +102,7 @@ async def scheduler_loop() -> None:
     while True:
         try:
             await process_scheduled_posts()
+
         except Exception:
             logger.exception(
                 "Unexpected error while processing scheduled posts."
@@ -101,7 +112,10 @@ async def scheduler_loop() -> None:
 
 
 async def main() -> None:
-    await scheduler_loop()
+    try:
+        await scheduler_loop()
+    finally:
+        await redis_queue.close()
 
 
 if __name__ == "__main__":

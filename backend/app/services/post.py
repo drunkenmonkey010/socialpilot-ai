@@ -9,6 +9,23 @@ from app.repositories.social_account import SocialAccountRepository
 from app.schemas.post import PostCreate, PostUpdate
 
 
+class ScheduledPublishError(Exception):
+    """
+    Error raised when a scheduled publication fails.
+
+    retryable=True means the Redis worker may retry the publication.
+    retryable=False means the publication should permanently fail.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        retryable: bool = False,
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+
+
 class PostService:
     """Business operations for Post entities."""
 
@@ -193,6 +210,42 @@ class PostService:
         )
 
     @staticmethod
+    def _classify_mastodon_error(
+        exc: Exception,
+    ) -> bool:
+        """
+        Determine whether a Mastodon publishing error is retryable.
+
+        Returns True for transient failures such as network errors,
+        rate limits, and server-side failures.
+        """
+
+        if isinstance(exc, (TimeoutError, ConnectionError)):
+            return True
+
+        message = str(exc)
+
+        status_codes = [
+            code
+            for code in range(100, 600)
+            if f" {code} " in message
+            or f" {code}:" in message
+        ]
+
+        if not status_codes:
+            return True
+
+        status_code = status_codes[0]
+
+        if status_code == 429:
+            return True
+
+        if 500 <= status_code <= 599:
+            return True
+
+        return False
+
+    @staticmethod
     async def _publish_post(
         db: AsyncSession,
         post: Post,
@@ -203,6 +256,9 @@ class PostService:
 
         The caller is responsible for validating the workflow state
         before calling this method.
+
+        This method preserves the existing manual publishing behavior:
+        any publishing failure transitions the post to FAILED.
         """
 
         platform = post.platform.lower().strip()
@@ -310,15 +366,16 @@ class PostService:
         Publish a scheduled post that has already been claimed
         by the scheduler.
 
+        Retryable platform failures leave the post in PUBLISHING
+        so the Redis worker can retry it.
+
+        Permanent failures transition the post to FAILED.
+
         The scheduler performs:
 
             SCHEDULED → PUBLISHING
 
         before calling this method.
-
-        A post can only reach SCHEDULED through schedule_post(),
-        which requires APPROVED status. Therefore the scheduler
-        does not bypass the human approval gate.
         """
 
         if post.status != PostStatus.PUBLISHING.value:
@@ -351,11 +408,90 @@ class PostService:
                 "Scheduled publication time has not been reached yet."
             )
 
-        return await PostService._publish_post(
-            db,
-            post,
-            user_id,
+        platform = post.platform.lower().strip()
+
+        if platform != "mastodon":
+            post.status = PostStatus.FAILED.value
+
+            await PostRepository.update(
+                db,
+                post,
+            )
+
+            raise ValueError(
+                f"Publishing is not supported for platform '{post.platform}'."
+            )
+
+        social_account = (
+            await SocialAccountRepository.get_by_platform_for_user(
+                db,
+                platform,
+                user_id,
+            )
         )
+
+        if social_account is None:
+            post.status = PostStatus.FAILED.value
+
+            await PostRepository.update(
+                db,
+                post,
+            )
+
+            raise ScheduledPublishError(
+                "No active Mastodon account is connected "
+                "for the current user.",
+                retryable=False,
+            )
+
+        if not social_account.is_active:
+            post.status = PostStatus.FAILED.value
+
+            await PostRepository.update(
+                db,
+                post,
+            )
+
+            raise ScheduledPublishError(
+                "The connected Mastodon account is inactive.",
+                retryable=False,
+            )
+
+        try:
+            mastodon_response = await publish_mastodon_status(
+                access_token=social_account.access_token,
+                content=post.content,
+            )
+
+            if not mastodon_response.get("id"):
+                raise RuntimeError(
+                    "Mastodon returned a successful response "
+                    "without a status ID."
+                )
+
+            post.status = PostStatus.PUBLISHED.value
+            post.published_at = datetime.now(timezone.utc)
+
+            return await PostRepository.update(
+                db,
+                post,
+            )
+
+        except Exception as exc:
+            retryable = PostService._classify_mastodon_error(exc)
+
+            if not retryable:
+                post.status = PostStatus.FAILED.value
+
+                await PostRepository.update(
+                    db,
+                    post,
+                )
+
+            raise ScheduledPublishError(
+                str(exc),
+                retryable=retryable,
+            ) from exc
 
     @staticmethod
     async def delete_post(

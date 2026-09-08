@@ -182,6 +182,95 @@ class PostRepository:
         return post
 
     @staticmethod
+    async def get_by_publication_key(
+        db: AsyncSession,
+        publication_key: str,
+    ) -> Post | None:
+        """
+        Find a post using its durable publication idempotency key.
+
+        The publication key is stable across retries and worker restarts.
+        """
+
+        result = await db.execute(
+            select(Post).where(
+                Post.publication_key == publication_key,
+            )
+        )
+
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def increment_publication_attempts(
+        db: AsyncSession,
+        post_id: int,
+    ) -> int:
+        """
+        Atomically increment the number of external publication attempts.
+
+        Returns the new attempt count.
+        """
+
+        result = await db.execute(
+            update(Post)
+            .where(
+                Post.id == post_id,
+            )
+            .values(
+                publication_attempts=Post.publication_attempts + 1,
+            )
+            .returning(Post.publication_attempts)
+        )
+
+        attempts = result.scalar_one_or_none()
+
+        if attempts is None:
+            await db.rollback()
+            raise ValueError(
+                f"Post {post_id} was not found while incrementing publication attempts."
+            )
+
+        await db.commit()
+
+        return attempts
+
+    @staticmethod
+    async def record_publication_result(
+        db: AsyncSession,
+        post_id: int,
+        external_post_id: str,
+    ) -> Post | None:
+        """
+        Persist the external platform publication ID and mark the post published.
+
+        The external ID is the durable evidence that the platform accepted
+        the publication.
+        """
+
+        result = await db.execute(
+            update(Post)
+            .where(
+                Post.id == post_id,
+            )
+            .values(
+                external_post_id=external_post_id,
+                status=PostStatus.PUBLISHED.value,
+                published_at=datetime.now(timezone.utc),
+            )
+            .returning(Post)
+        )
+
+        post = result.scalar_one_or_none()
+
+        if post is None:
+            await db.rollback()
+            return None
+
+        await db.commit()
+
+        return post
+
+    @staticmethod
     async def update(
         db: AsyncSession,
         post: Post,

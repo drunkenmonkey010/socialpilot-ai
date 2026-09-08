@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -60,6 +60,26 @@ class Post(Base):
     published_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+    publication_key: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+
+    external_post_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    publication_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
     )
 
     created_at: Mapped[datetime] = mapped_column(

@@ -35,6 +35,45 @@ class PostService:
     }
 
     @staticmethod
+    def _build_publication_key(post: Post) -> str:
+        """
+        Build the durable publication key for a post.
+
+        The key is stable across retries, Redis requeues, worker restarts,
+        and recovery operations.
+        """
+
+        platform = post.platform.lower().strip()
+
+        return f"socialpilot:post:{post.id}:{platform}"
+
+    @staticmethod
+    async def _ensure_publication_key(
+        db: AsyncSession,
+        post: Post,
+    ) -> str:
+        """
+        Ensure the post has a durable publication key.
+
+        Existing keys are preserved so retries always refer to the same
+        publication identity.
+        """
+
+        if post.publication_key:
+            return post.publication_key
+
+        publication_key = PostService._build_publication_key(post)
+
+        post.publication_key = publication_key
+
+        await PostRepository.update(
+            db,
+            post,
+        )
+
+        return publication_key
+
+    @staticmethod
     async def create_post(
         db: AsyncSession,
         user_id: int,
@@ -254,11 +293,10 @@ class PostService:
         """
         Perform the actual platform publishing operation.
 
-        The caller is responsible for validating the workflow state
-        before calling this method.
+        The publication state is persisted before and after the external
+        request so retries can use the same durable publication identity.
 
-        This method preserves the existing manual publishing behavior:
-        any publishing failure transitions the post to FAILED.
+        The caller is responsible for validating the workflow state.
         """
 
         platform = post.platform.lower().strip()
@@ -287,34 +325,63 @@ class PostService:
                 "The connected Mastodon account is inactive."
             )
 
+        # If the external platform ID is already stored, the publication
+        # has already succeeded. Never send another external POST.
+        if post.external_post_id:
+            if post.status != PostStatus.PUBLISHED.value:
+                post.status = PostStatus.PUBLISHED.value
+
+                if post.published_at is None:
+                    post.published_at = datetime.now(timezone.utc)
+
+                await PostRepository.update(
+                    db,
+                    post,
+                )
+
+            return post
+
+        # Establish the stable publication identity before the external call.
+        await PostService._ensure_publication_key(
+            db,
+            post,
+        )
+
+        # Count this actual attempt immediately before contacting Mastodon.
+        await PostRepository.increment_publication_attempts(
+            db,
+            post.id,
+        )
+
         try:
             mastodon_response = await publish_mastodon_status(
                 access_token=social_account.access_token,
                 content=post.content,
             )
 
-            if not mastodon_response.get("id"):
+            external_post_id = mastodon_response.get("id")
+
+            if not external_post_id:
                 raise RuntimeError(
                     "Mastodon returned a successful response "
                     "without a status ID."
                 )
 
-            post.status = PostStatus.PUBLISHED.value
-            post.published_at = datetime.now(timezone.utc)
-
-            return await PostRepository.update(
+            published_post = await PostRepository.record_publication_result(
                 db,
-                post,
+                post.id,
+                str(external_post_id),
             )
+
+            if published_post is None:
+                raise RuntimeError(
+                    f"Post {post.id} disappeared while recording "
+                    "the publication result."
+                )
+
+            return published_post
 
         except Exception:
-            post.status = PostStatus.FAILED.value
-
-            await PostRepository.update(
-                db,
-                post,
-            )
-
             raise
 
     @staticmethod
@@ -350,11 +417,21 @@ class PostService:
             post,
         )
 
-        return await PostService._publish_post(
-            db,
-            post,
-            user_id,
-        )
+        try:
+            return await PostService._publish_post(
+                db,
+                post,
+                user_id,
+            )
+        except Exception:
+            post.status = PostStatus.FAILED.value
+
+            await PostRepository.update(
+                db,
+                post,
+            )
+
+            raise
 
     @staticmethod
     async def publish_scheduled_post(
@@ -369,7 +446,7 @@ class PostService:
         Retryable platform failures leave the post in PUBLISHING
         so the Redis worker can retry it.
 
-        Permanent failures transition the post to FAILED.
+        Permanent failures transition to FAILED.
 
         The scheduler performs:
 
@@ -457,25 +534,59 @@ class PostService:
                 retryable=False,
             )
 
+        # A recovered or retried job may reach this method after a previous
+        # successful publication. The durable external ID is authoritative.
+        if post.external_post_id:
+            if post.status != PostStatus.PUBLISHED.value:
+                post.status = PostStatus.PUBLISHED.value
+
+                if post.published_at is None:
+                    post.published_at = datetime.now(timezone.utc)
+
+                await PostRepository.update(
+                    db,
+                    post,
+                )
+
+            return post
+
+        await PostService._ensure_publication_key(
+            db,
+            post,
+        )
+
         try:
+            await PostRepository.increment_publication_attempts(
+                db,
+                post.id,
+            )
+
             mastodon_response = await publish_mastodon_status(
                 access_token=social_account.access_token,
                 content=post.content,
             )
 
-            if not mastodon_response.get("id"):
+            external_post_id = mastodon_response.get("id")
+
+            if not external_post_id:
                 raise RuntimeError(
                     "Mastodon returned a successful response "
                     "without a status ID."
                 )
 
-            post.status = PostStatus.PUBLISHED.value
-            post.published_at = datetime.now(timezone.utc)
-
-            return await PostRepository.update(
+            published_post = await PostRepository.record_publication_result(
                 db,
-                post,
+                post.id,
+                str(external_post_id),
             )
+
+            if published_post is None:
+                raise RuntimeError(
+                    f"Post {post.id} disappeared while recording "
+                    "the publication result."
+                )
+
+            return published_post
 
         except Exception as exc:
             retryable = PostService._classify_mastodon_error(exc)

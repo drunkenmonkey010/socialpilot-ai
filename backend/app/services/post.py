@@ -3,6 +3,10 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.platforms import (
+    PlatformPermanentError,
+    PlatformRateLimitError,
+    PlatformTransientError,
+    PlatformValidationError,
     register_platforms,
     platform_registry,
 )
@@ -322,7 +326,8 @@ class PostService:
         Platform-specific API behavior is delegated to the registered
         PlatformPublisher adapter.
 
-        The caller is responsible for validating the workflow state.
+        Validation happens before publication_attempts is incremented,
+        because validation failures are not external publication attempts.
         """
 
         platform = post.platform.lower().strip()
@@ -357,8 +362,13 @@ class PostService:
             post,
         )
 
-        # Count this actual attempt immediately before contacting the
-        # external platform.
+        # Validate before counting an actual external attempt.
+        publisher.validate_content(
+            post.content,
+        )
+
+        # Count only after validation succeeds and immediately before
+        # contacting the external platform.
         await PostRepository.increment_publication_attempts(
             db,
             post.id,
@@ -547,8 +557,12 @@ class PostService:
         )
 
         try:
-            # Count the external publication attempt immediately before
-            # contacting the platform.
+            # Validation happens before counting an external attempt.
+            publisher.validate_content(
+                post.content,
+            )
+
+            # Count only a real external publication attempt.
             await PostRepository.increment_publication_attempts(
                 db,
                 post.id,

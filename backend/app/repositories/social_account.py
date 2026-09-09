@@ -66,11 +66,20 @@ class SocialAccountRepository:
     @staticmethod
     async def get_by_platform_and_account_id(
         db: AsyncSession,
+        user_id: int,
         platform: str,
         account_id: str,
     ) -> SocialAccount | None:
+        """
+        Find a connected social account belonging to a specific user.
+
+        The combination of user_id, platform, and external account_id
+        identifies an account connection within SocialPilot.
+        """
+
         result = await db.execute(
             select(SocialAccount).where(
+                SocialAccount.user_id == user_id,
                 SocialAccount.platform == platform,
                 SocialAccount.account_id == account_id,
             )
@@ -85,7 +94,8 @@ class SocialAccountRepository:
         user_id: int,
     ) -> SocialAccount | None:
         result = await db.execute(
-            select(SocialAccount).where(
+            select(SocialAccount)
+            .where(
                 SocialAccount.platform == platform,
                 SocialAccount.user_id == user_id,
                 SocialAccount.is_active.is_(True),

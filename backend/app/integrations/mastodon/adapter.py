@@ -5,7 +5,6 @@ from app.integrations.platforms.errors import (
     PlatformPermanentError,
     PlatformRateLimitError,
     PlatformTransientError,
-    PlatformValidationError,
 )
 from app.integrations.platforms.types import (
     PlatformCapabilities,
@@ -57,10 +56,7 @@ class MastodonAdapter(PlatformPublisher):
                 "Mastodon access token is required."
             )
 
-        try:
-            self.validate_content(content)
-        except ValueError as exc:
-            raise PlatformValidationError(str(exc)) from exc
+        self.validate_content(content)
 
         try:
             response = await publish_mastodon_status(
@@ -111,7 +107,6 @@ class MastodonAdapter(PlatformPublisher):
             exc,
             (
                 PlatformAuthenticationError,
-                PlatformValidationError,
                 PlatformPermanentError,
             ),
         ):
@@ -150,7 +145,7 @@ class MastodonAdapter(PlatformPublisher):
 
         status_code = status_codes[0]
 
-        if status_code == 401 or status_code == 403:
+        if status_code in (401, 403):
             return PlatformAuthenticationError(message)
 
         if status_code == 429:

@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+from app.integrations.platforms.errors import PlatformValidationError
 from app.integrations.platforms.types import (
     PlatformCapabilities,
     PublicationResult,
@@ -28,20 +29,20 @@ class PlatformPublisher(ABC):
         content: str,
     ) -> None:
         """
-        Perform generic capability-based content validation.
+        Validate content against generic platform capabilities.
 
         Platform-specific API validation remains inside the adapter.
         """
 
         if not content or not content.strip():
-            raise ValueError(
+            raise PlatformValidationError(
                 f"{self.platform} content cannot be empty."
             )
 
         capabilities = self.capabilities
 
         if not capabilities.text:
-            raise ValueError(
+            raise PlatformValidationError(
                 f"{self.platform} does not support text publications."
             )
 
@@ -49,7 +50,7 @@ class PlatformPublisher(ABC):
             capabilities.max_text_length is not None
             and len(content) > capabilities.max_text_length
         ):
-            raise ValueError(
+            raise PlatformValidationError(
                 f"{self.platform} content exceeds the maximum "
                 f"length of {capabilities.max_text_length} characters."
             )
@@ -65,8 +66,7 @@ class PlatformPublisher(ABC):
         Publish content to the platform.
 
         publication_key is a stable application-level identity for the
-        publication attempt. Platforms may use it for native idempotency
-        where supported.
+        publication attempt.
         """
 
     async def reconcile(

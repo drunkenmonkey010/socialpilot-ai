@@ -1,6 +1,7 @@
 import pytest
 
 from app.integrations.platforms.base import PlatformPublisher
+from app.integrations.platforms.errors import PlatformValidationError
 from app.integrations.platforms.registry import PlatformRegistry
 from app.integrations.platforms.types import (
     PlatformCapabilities,
@@ -187,7 +188,7 @@ def test_validate_content_rejects_empty_content():
     publisher = FakePublisher()
 
     with pytest.raises(
-        ValueError,
+        PlatformValidationError,
         match="content cannot be empty",
     ):
         publisher.validate_content("")
@@ -199,7 +200,7 @@ def test_validate_content_rejects_content_over_limit():
     content = "a" * 101
 
     with pytest.raises(
-        ValueError,
+        PlatformValidationError,
         match="maximum length of 100",
     ):
         publisher.validate_content(content)

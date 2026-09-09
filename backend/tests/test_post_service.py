@@ -109,7 +109,7 @@ async def test_first_scheduled_publication_persists_idempotency_state(
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
-                "app.services.post.publish_mastodon_status",
+                "app.integrations.mastodon.adapter.publish_mastodon_status",
                 new=AsyncMock(return_value={"id": "mastodon-status-123"}),
             ) as publish_mock,
         ):
@@ -174,7 +174,7 @@ async def test_already_published_post_is_not_published_again(
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
-                "app.services.post.publish_mastodon_status",
+                "app.integrations.mastodon.adapter.publish_mastodon_status",
                 new=AsyncMock(),
             ) as publish_mock,
         ):
@@ -227,7 +227,7 @@ async def test_transient_publication_failure_is_retryable(
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
-                "app.services.post.publish_mastodon_status",
+                "app.integrations.mastodon.adapter.publish_mastodon_status",
                 new=AsyncMock(
                     side_effect=RuntimeError(
                         "Mastodon status publication failed: 500 server error"
@@ -286,7 +286,7 @@ async def test_permanent_publication_failure_marks_post_failed(
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
-                "app.services.post.publish_mastodon_status",
+                "app.integrations.mastodon.adapter.publish_mastodon_status",
                 new=AsyncMock(
                     side_effect=RuntimeError(
                         "Mastodon status publication failed: 401 unauthorized"
@@ -351,7 +351,7 @@ async def test_retry_after_transient_failure_publishes_once(
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
-                "app.services.post.publish_mastodon_status",
+                "app.integrations.mastodon.adapter.publish_mastodon_status",
                 new=publish_mock,
             ),
         ):

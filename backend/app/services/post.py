@@ -2,7 +2,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.mastodon.oauth import publish_mastodon_status
+from app.integrations.platforms import (
+    PlatformPermanentError,
+    PlatformRateLimitError,
+    PlatformTransientError,
+    PlatformValidationError,
+    register_platforms,
+    platform_registry,
+)
 from app.models.post import Post, PostStatus
 from app.repositories.post import PostRepository
 from app.repositories.social_account import SocialAccountRepository
@@ -249,62 +256,42 @@ class PostService:
         )
 
     @staticmethod
-    def _classify_mastodon_error(
+    def _get_publisher(platform: str):
+        """
+        Resolve the generic platform publisher.
+
+        Platform-specific implementations are hidden behind the registry.
+        """
+
+        register_platforms()
+
+        return platform_registry.get(platform)
+
+    @staticmethod
+    def _classify_platform_error(
+        publisher,
         exc: Exception,
     ) -> bool:
         """
-        Determine whether a Mastodon publishing error is retryable.
+        Determine whether a platform error is retryable.
 
-        Returns True for transient failures such as network errors,
-        rate limits, and server-side failures.
+        Platform-specific error interpretation belongs to the adapter.
+        The service only consumes the generic retryable/permanent result.
         """
 
-        if isinstance(exc, (TimeoutError, ConnectionError)):
-            return True
-
-        message = str(exc)
-
-        status_codes = [
-            code
-            for code in range(100, 600)
-            if f" {code} " in message
-            or f" {code}:" in message
-        ]
-
-        if not status_codes:
-            return True
-
-        status_code = status_codes[0]
-
-        if status_code == 429:
-            return True
-
-        if 500 <= status_code <= 599:
-            return True
-
-        return False
+        return publisher.classify_error(exc)
 
     @staticmethod
-    async def _publish_post(
+    async def _get_social_account(
         db: AsyncSession,
-        post: Post,
+        platform: str,
         user_id: int,
-    ) -> Post:
+    ):
         """
-        Perform the actual platform publishing operation.
+        Retrieve the active social account for a platform.
 
-        The publication state is persisted before and after the external
-        request so retries can use the same durable publication identity.
-
-        The caller is responsible for validating the workflow state.
+        The service does not contain platform-specific account logic.
         """
-
-        platform = post.platform.lower().strip()
-
-        if platform != "mastodon":
-            raise ValueError(
-                f"Publishing is not supported for platform '{post.platform}'."
-            )
 
         social_account = (
             await SocialAccountRepository.get_by_platform_for_user(
@@ -316,14 +303,41 @@ class PostService:
 
         if social_account is None:
             raise ValueError(
-                "No active Mastodon account is connected "
+                f"No active {platform} account is connected "
                 "for the current user."
             )
 
         if not social_account.is_active:
             raise ValueError(
-                "The connected Mastodon account is inactive."
+                f"The connected {platform} account is inactive."
             )
+
+        return social_account
+
+    @staticmethod
+    async def _publish_post(
+        db: AsyncSession,
+        post: Post,
+        user_id: int,
+    ) -> Post:
+        """
+        Perform the actual platform publishing operation.
+
+        Platform-specific API behavior is delegated to the registered
+        PlatformPublisher adapter.
+
+        The caller is responsible for validating the workflow state.
+        """
+
+        platform = post.platform.lower().strip()
+
+        publisher = PostService._get_publisher(platform)
+
+        social_account = await PostService._get_social_account(
+            db,
+            platform,
+            user_id,
+        )
 
         # If the external platform ID is already stored, the publication
         # has already succeeded. Never send another external POST.
@@ -347,42 +361,31 @@ class PostService:
             post,
         )
 
-        # Count this actual attempt immediately before contacting Mastodon.
+        # Count this actual attempt immediately before contacting the
+        # external platform.
         await PostRepository.increment_publication_attempts(
             db,
             post.id,
         )
 
-        try:
-            mastodon_response = await publish_mastodon_status(
-                access_token=social_account.access_token,
-                content=post.content,
+        publication_result = await publisher.publish(
+            account=social_account,
+            content=post.content,
+        )
+
+        published_post = await PostRepository.record_publication_result(
+            db,
+            post.id,
+            publication_result.external_post_id,
+        )
+
+        if published_post is None:
+            raise RuntimeError(
+                f"Post {post.id} disappeared while recording "
+                "the publication result."
             )
 
-            external_post_id = mastodon_response.get("id")
-
-            if not external_post_id:
-                raise RuntimeError(
-                    "Mastodon returned a successful response "
-                    "without a status ID."
-                )
-
-            published_post = await PostRepository.record_publication_result(
-                db,
-                post.id,
-                str(external_post_id),
-            )
-
-            if published_post is None:
-                raise RuntimeError(
-                    f"Post {post.id} disappeared while recording "
-                    "the publication result."
-                )
-
-            return published_post
-
-        except Exception:
-            raise
+        return published_post
 
     @staticmethod
     async def publish_post(
@@ -487,7 +490,9 @@ class PostService:
 
         platform = post.platform.lower().strip()
 
-        if platform != "mastodon":
+        try:
+            publisher = PostService._get_publisher(platform)
+        except Exception as exc:
             post.status = PostStatus.FAILED.value
 
             await PostRepository.update(
@@ -495,19 +500,19 @@ class PostService:
                 post,
             )
 
-            raise ValueError(
-                f"Publishing is not supported for platform '{post.platform}'."
-            )
+            raise ScheduledPublishError(
+                str(exc),
+                retryable=False,
+            ) from exc
 
-        social_account = (
-            await SocialAccountRepository.get_by_platform_for_user(
+        try:
+            social_account = await PostService._get_social_account(
                 db,
                 platform,
                 user_id,
             )
-        )
 
-        if social_account is None:
+        except ValueError as exc:
             post.status = PostStatus.FAILED.value
 
             await PostRepository.update(
@@ -516,23 +521,9 @@ class PostService:
             )
 
             raise ScheduledPublishError(
-                "No active Mastodon account is connected "
-                "for the current user.",
+                str(exc),
                 retryable=False,
-            )
-
-        if not social_account.is_active:
-            post.status = PostStatus.FAILED.value
-
-            await PostRepository.update(
-                db,
-                post,
-            )
-
-            raise ScheduledPublishError(
-                "The connected Mastodon account is inactive.",
-                retryable=False,
-            )
+            ) from exc
 
         # A recovered or retried job may reach this method after a previous
         # successful publication. The durable external ID is authoritative.
@@ -550,34 +541,29 @@ class PostService:
 
             return post
 
+        # Establish the stable publication identity before the external call.
         await PostService._ensure_publication_key(
             db,
             post,
         )
 
         try:
+            # Count the external publication attempt immediately before
+            # contacting the platform.
             await PostRepository.increment_publication_attempts(
                 db,
                 post.id,
             )
 
-            mastodon_response = await publish_mastodon_status(
-                access_token=social_account.access_token,
+            publication_result = await publisher.publish(
+                account=social_account,
                 content=post.content,
             )
-
-            external_post_id = mastodon_response.get("id")
-
-            if not external_post_id:
-                raise RuntimeError(
-                    "Mastodon returned a successful response "
-                    "without a status ID."
-                )
 
             published_post = await PostRepository.record_publication_result(
                 db,
                 post.id,
-                str(external_post_id),
+                publication_result.external_post_id,
             )
 
             if published_post is None:
@@ -589,7 +575,10 @@ class PostService:
             return published_post
 
         except Exception as exc:
-            retryable = PostService._classify_mastodon_error(exc)
+            retryable = PostService._classify_platform_error(
+                publisher,
+                exc,
+            )
 
             if not retryable:
                 post.status = PostStatus.FAILED.value

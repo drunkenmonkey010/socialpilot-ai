@@ -26,10 +26,17 @@ class MastodonAdapter(PlatformPublisher):
 
     @property
     def capabilities(self) -> PlatformCapabilities:
+        """
+        Return capabilities currently implemented by this adapter.
+
+        Media support will be enabled only after the adapter implements
+        actual media upload/publication handling.
+        """
+
         return PlatformCapabilities(
             text=True,
-            images=True,
-            video=True,
+            images=False,
+            video=False,
             carousel=False,
             scheduling=False,
             analytics=False,
@@ -41,6 +48,7 @@ class MastodonAdapter(PlatformPublisher):
         self,
         account: SocialAccount,
         content: str,
+        publication_key: str | None = None,
     ) -> PublicationResult:
         """Publish text content through Mastodon's API."""
 
@@ -49,10 +57,10 @@ class MastodonAdapter(PlatformPublisher):
                 "Mastodon access token is required."
             )
 
-        if not content.strip():
-            raise PlatformValidationError(
-                "Mastodon status content cannot be empty."
-            )
+        try:
+            self.validate_content(content)
+        except ValueError as exc:
+            raise PlatformValidationError(str(exc)) from exc
 
         try:
             response = await publish_mastodon_status(
@@ -76,6 +84,7 @@ class MastodonAdapter(PlatformPublisher):
             external_post_id=str(external_post_id),
             metadata={
                 "response": response,
+                "publication_key": publication_key,
             },
         )
 
@@ -86,7 +95,7 @@ class MastodonAdapter(PlatformPublisher):
         """
         Return whether a Mastodon error should be retried.
 
-        The adapter owns interpretation of Mastodon's HTTP/API failures.
+        The adapter owns interpretation of Mastodon's API failures.
         """
 
         if isinstance(
@@ -115,11 +124,7 @@ class MastodonAdapter(PlatformPublisher):
         exc: Exception,
     ) -> Exception:
         """
-        Translate the existing Mastodon integration error into a generic
-        platform error.
-
-        This keeps Mastodon-specific error parsing outside the application
-        core.
+        Translate Mastodon-specific failures into generic platform errors.
         """
 
         if isinstance(

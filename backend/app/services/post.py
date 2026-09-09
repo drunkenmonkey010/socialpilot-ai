@@ -3,10 +3,6 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.platforms import (
-    PlatformPermanentError,
-    PlatformRateLimitError,
-    PlatformTransientError,
-    PlatformValidationError,
     register_platforms,
     platform_registry,
 )
@@ -356,7 +352,7 @@ class PostService:
             return post
 
         # Establish the stable publication identity before the external call.
-        await PostService._ensure_publication_key(
+        publication_key = await PostService._ensure_publication_key(
             db,
             post,
         )
@@ -371,6 +367,7 @@ class PostService:
         publication_result = await publisher.publish(
             account=social_account,
             content=post.content,
+            publication_key=publication_key,
         )
 
         published_post = await PostRepository.record_publication_result(
@@ -426,6 +423,7 @@ class PostService:
                 post,
                 user_id,
             )
+
         except Exception:
             post.status = PostStatus.FAILED.value
 
@@ -492,6 +490,7 @@ class PostService:
 
         try:
             publisher = PostService._get_publisher(platform)
+
         except Exception as exc:
             post.status = PostStatus.FAILED.value
 
@@ -542,7 +541,7 @@ class PostService:
             return post
 
         # Establish the stable publication identity before the external call.
-        await PostService._ensure_publication_key(
+        publication_key = await PostService._ensure_publication_key(
             db,
             post,
         )
@@ -558,6 +557,7 @@ class PostService:
             publication_result = await publisher.publish(
                 account=social_account,
                 content=post.content,
+                publication_key=publication_key,
             )
 
             published_post = await PostRepository.record_publication_result(

@@ -5,8 +5,7 @@ class PlatformRegistry:
     """
     Registry of available social media platform publishers.
 
-    Platform names are normalized to lowercase so callers can safely use
-    values such as "Mastodon", "MASTODON", or "mastodon".
+    Platform names are normalized to lowercase.
     """
 
     def __init__(self) -> None:
@@ -17,6 +16,11 @@ class PlatformRegistry:
         publisher: PlatformPublisher,
     ) -> None:
         """Register a platform publisher."""
+
+        if not isinstance(publisher, PlatformPublisher):
+            raise TypeError(
+                "Only PlatformPublisher implementations can be registered."
+            )
 
         platform = publisher.platform.lower().strip()
 
@@ -39,6 +43,11 @@ class PlatformRegistry:
         """Return the publisher registered for a platform."""
 
         normalized_platform = platform.lower().strip()
+
+        if not normalized_platform:
+            raise ValueError(
+                "Platform name cannot be empty."
+            )
 
         publisher = self._publishers.get(normalized_platform)
 
@@ -64,4 +73,8 @@ class PlatformRegistry:
         return tuple(sorted(self._publishers))
 
 
+# Global application registry.
+#
+# Platform adapters are registered during application setup through
+# register_platforms().
 platform_registry = PlatformRegistry()

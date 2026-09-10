@@ -2,18 +2,10 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.platforms import (
-    PlatformPermanentError,
-    PlatformRateLimitError,
-    PlatformTransientError,
-    PlatformValidationError,
-    register_platforms,
-    platform_registry,
-)
 from app.models.post import Post, PostStatus
 from app.repositories.post import PostRepository
-from app.repositories.social_account import SocialAccountRepository
 from app.schemas.post import PostCreate, PostUpdate
+from app.services.publication import PublicationService
 
 
 class ScheduledPublishError(Exception):
@@ -22,63 +14,36 @@ class ScheduledPublishError(Exception):
 
     retryable=True means the Redis worker may retry the publication.
     retryable=False means the publication should permanently fail.
+
+    retry_after_seconds contains a platform-provided rate-limit delay
+    when one is available.
     """
 
     def __init__(
         self,
         message: str,
         retryable: bool = False,
+        retry_after_seconds: int | None = None,
     ):
         super().__init__(message)
+
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 class PostService:
-    """Business operations for Post entities."""
+    """
+    Business operations for Post entities.
+
+    PostService owns the post lifecycle and Human-in-the-Loop boundary.
+
+    Publication mechanics are delegated to PublicationService.
+    """
 
     EDITABLE_STATUSES = {
         PostStatus.DRAFT.value,
         PostStatus.REJECTED.value,
     }
-
-    @staticmethod
-    def _build_publication_key(post: Post) -> str:
-        """
-        Build the durable publication key for a post.
-
-        The key is stable across retries, Redis requeues, worker restarts,
-        and recovery operations.
-        """
-
-        platform = post.platform.lower().strip()
-
-        return f"socialpilot:post:{post.id}:{platform}"
-
-    @staticmethod
-    async def _ensure_publication_key(
-        db: AsyncSession,
-        post: Post,
-    ) -> str:
-        """
-        Ensure the post has a durable publication key.
-
-        Existing keys are preserved so retries always refer to the same
-        publication identity.
-        """
-
-        if post.publication_key:
-            return post.publication_key
-
-        publication_key = PostService._build_publication_key(post)
-
-        post.publication_key = publication_key
-
-        await PostRepository.update(
-            db,
-            post,
-        )
-
-        return publication_key
 
     @staticmethod
     async def create_post(
@@ -256,143 +221,23 @@ class PostService:
         )
 
     @staticmethod
-    def _get_publisher(platform: str):
-        """
-        Resolve the generic platform publisher.
-
-        Platform-specific implementations are hidden behind the registry.
-        """
-
-        register_platforms()
-
-        return platform_registry.get(platform)
-
-    @staticmethod
-    def _classify_platform_error(
-        publisher,
-        exc: Exception,
-    ) -> bool:
-        """
-        Determine whether a platform error is retryable.
-
-        Platform-specific error interpretation belongs to the adapter.
-        The service only consumes the generic retryable/permanent result.
-        """
-
-        return publisher.classify_error(exc)
-
-    @staticmethod
-    async def _get_social_account(
-        db: AsyncSession,
-        platform: str,
-        user_id: int,
-    ):
-        """
-        Retrieve the active social account for a platform.
-
-        The service does not contain platform-specific account logic.
-        """
-
-        social_account = (
-            await SocialAccountRepository.get_by_platform_for_user(
-                db,
-                platform,
-                user_id,
-            )
-        )
-
-        if social_account is None:
-            raise ValueError(
-                f"No active {platform} account is connected "
-                "for the current user."
-            )
-
-        if not social_account.is_active:
-            raise ValueError(
-                f"The connected {platform} account is inactive."
-            )
-
-        return social_account
-
-    @staticmethod
     async def _publish_post(
         db: AsyncSession,
         post: Post,
         user_id: int,
     ) -> Post:
         """
-        Perform the actual platform publishing operation.
+        Delegate the actual publication operation to PublicationService.
 
-        Platform-specific API behavior is delegated to the registered
-        PlatformPublisher adapter.
-
-        Validation happens before publication_attempts is incremented,
-        because validation failures are not external publication attempts.
+        PostService owns lifecycle.
+        PublicationService owns publication orchestration.
         """
 
-        platform = post.platform.lower().strip()
-
-        publisher = PostService._get_publisher(platform)
-
-        social_account = await PostService._get_social_account(
-            db,
-            platform,
-            user_id,
-        )
-
-        # If the external platform ID is already stored, the publication
-        # has already succeeded. Never send another external POST.
-        if post.external_post_id:
-            if post.status != PostStatus.PUBLISHED.value:
-                post.status = PostStatus.PUBLISHED.value
-
-                if post.published_at is None:
-                    post.published_at = datetime.now(timezone.utc)
-
-                await PostRepository.update(
-                    db,
-                    post,
-                )
-
-            return post
-
-        # Establish the stable publication identity before the external call.
-        publication_key = await PostService._ensure_publication_key(
+        return await PublicationService.publish(
             db,
             post,
+            user_id,
         )
-
-        # Validate before counting an actual external attempt.
-        publisher.validate_content(
-            post.content,
-        )
-
-        # Count only after validation succeeds and immediately before
-        # contacting the external platform.
-        await PostRepository.increment_publication_attempts(
-            db,
-            post.id,
-        )
-
-        publication_result = await publisher.publish(
-            account=social_account,
-            content=post.content,
-            publication_key=publication_key,
-        )
-
-        published_post = await PostRepository.record_publication_result(
-            db,
-            post.id,
-            publication_result.external_post_id,
-        )
-
-        if published_post is None:
-            raise RuntimeError(
-                f"Post {post.id} disappeared while recording "
-                "the publication result."
-            )
-
-        return published_post
 
     @staticmethod
     async def publish_post(
@@ -459,11 +304,15 @@ class PostService:
 
         Permanent failures transition to FAILED.
 
-        The scheduler performs:
+        Scheduler lifecycle:
 
-            SCHEDULED → PUBLISHING
-
-        before calling this method.
+            SCHEDULED
+                ↓
+            PUBLISHING
+                ↓
+            PublicationService
+                ↓
+            PUBLISHED / retry / FAILED
         """
 
         if post.status != PostStatus.PUBLISHING.value:
@@ -496,30 +345,27 @@ class PostService:
                 "Scheduled publication time has not been reached yet."
             )
 
-        platform = post.platform.lower().strip()
+        publisher = None
 
         try:
-            publisher = PostService._get_publisher(platform)
-
-        except Exception as exc:
-            post.status = PostStatus.FAILED.value
-
-            await PostRepository.update(
-                db,
-                post,
+            publisher = PublicationService.get_publisher(
+                post.platform,
             )
 
-            raise ScheduledPublishError(
-                str(exc),
-                retryable=False,
-            ) from exc
-
-        try:
-            social_account = await PostService._get_social_account(
+            await PublicationService.get_social_account(
                 db,
-                platform,
+                post.platform.lower().strip(),
                 user_id,
             )
+
+            return await PublicationService.publish(
+                db,
+                post,
+                user_id,
+            )
+
+        except ScheduledPublishError:
+            raise
 
         except ValueError as exc:
             post.status = PostStatus.FAILED.value
@@ -534,64 +380,25 @@ class PostService:
                 retryable=False,
             ) from exc
 
-        # A recovered or retried job may reach this method after a previous
-        # successful publication. The durable external ID is authoritative.
-        if post.external_post_id:
-            if post.status != PostStatus.PUBLISHED.value:
-                post.status = PostStatus.PUBLISHED.value
-
-                if post.published_at is None:
-                    post.published_at = datetime.now(timezone.utc)
+        except Exception as exc:
+            if publisher is None:
+                post.status = PostStatus.FAILED.value
 
                 await PostRepository.update(
                     db,
                     post,
                 )
 
-            return post
+                raise ScheduledPublishError(
+                    str(exc),
+                    retryable=False,
+                ) from exc
 
-        # Establish the stable publication identity before the external call.
-        publication_key = await PostService._ensure_publication_key(
-            db,
-            post,
-        )
-
-        try:
-            # Validation happens before counting an external attempt.
-            publisher.validate_content(
-                post.content,
-            )
-
-            # Count only a real external publication attempt.
-            await PostRepository.increment_publication_attempts(
-                db,
-                post.id,
-            )
-
-            publication_result = await publisher.publish(
-                account=social_account,
-                content=post.content,
-                publication_key=publication_key,
-            )
-
-            published_post = await PostRepository.record_publication_result(
-                db,
-                post.id,
-                publication_result.external_post_id,
-            )
-
-            if published_post is None:
-                raise RuntimeError(
-                    f"Post {post.id} disappeared while recording "
-                    "the publication result."
+            retryable = (
+                PublicationService.classify_platform_error(
+                    publisher,
+                    exc,
                 )
-
-            return published_post
-
-        except Exception as exc:
-            retryable = PostService._classify_platform_error(
-                publisher,
-                exc,
             )
 
             if not retryable:
@@ -602,9 +409,16 @@ class PostService:
                     post,
                 )
 
+            retry_after_seconds = getattr(
+                exc,
+                "retry_after_seconds",
+                None,
+            )
+
             raise ScheduledPublishError(
                 str(exc),
                 retryable=retryable,
+                retry_after_seconds=retry_after_seconds,
             ) from exc
 
     @staticmethod

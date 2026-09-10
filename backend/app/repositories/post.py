@@ -143,6 +143,34 @@ class PostRepository:
         return list(result.all())
 
     @staticmethod
+    async def get_publishing_posts(
+        db: AsyncSession,
+    ) -> list[tuple[Post, int]]:
+        """
+        Return posts currently in PUBLISHING state.
+
+        The returned tuple contains:
+
+            (post, user_id)
+
+        This is used by recovery to detect the failure window where
+        PostgreSQL successfully transitioned a post to PUBLISHING but
+        Redis enqueueing did not complete.
+        """
+
+        result = await db.execute(
+            select(Post, Brand.user_id)
+            .join(Campaign, Post.campaign_id == Campaign.id)
+            .join(Brand, Campaign.brand_id == Brand.id)
+            .where(
+                Post.status == PostStatus.PUBLISHING.value,
+            )
+            .order_by(Post.id.asc())
+        )
+
+        return list(result.all())
+
+    @staticmethod
     async def claim_scheduled_post(
         db: AsyncSession,
         post_id: int,
@@ -227,7 +255,8 @@ class PostRepository:
         if attempts is None:
             await db.rollback()
             raise ValueError(
-                f"Post {post_id} was not found while incrementing publication attempts."
+                f"Post {post_id} was not found while "
+                "incrementing publication attempts."
             )
 
         await db.commit()
@@ -241,10 +270,11 @@ class PostRepository:
         external_post_id: str,
     ) -> Post | None:
         """
-        Persist the external platform publication ID and mark the post published.
+        Persist the external platform publication ID and mark the post
+        published.
 
-        The external ID is the durable evidence that the platform accepted
-        the publication.
+        The external ID is the durable evidence that the platform
+        accepted the publication.
         """
 
         result = await db.execute(

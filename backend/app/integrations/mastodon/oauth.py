@@ -117,7 +117,8 @@ async def publish_mastodon_status(
     """
     Publish a text status to Mastodon.
 
-    Returns the Mastodon status object returned by the API.
+    HTTP errors are raised as HTTPStatusError so the platform adapter
+    can inspect status codes and response headers such as Retry-After.
     """
 
     if not access_token:
@@ -145,9 +146,13 @@ async def publish_mastodon_status(
         )
 
     if response.is_error:
-        raise RuntimeError(
-            "Mastodon status publication failed: "
-            f"{response.status_code} {response.text}"
+        raise httpx.HTTPStatusError(
+            message=(
+                "Mastodon status publication failed: "
+                f"{response.status_code} {response.text}"
+            ),
+            request=response.request,
+            response=response,
         )
 
     return response.json()

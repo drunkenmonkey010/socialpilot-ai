@@ -105,7 +105,7 @@ async def test_first_scheduled_publication_persists_idempotency_state(
 
         with (
             patch(
-                "app.services.post.SocialAccountRepository.get_by_platform_for_user",
+                "app.services.publication.SocialAccountRepository.get_by_platform_for_user",
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
@@ -170,7 +170,7 @@ async def test_already_published_post_is_not_published_again(
 
         with (
             patch(
-                "app.services.post.SocialAccountRepository.get_by_platform_for_user",
+                "app.services.publication.SocialAccountRepository.get_by_platform_for_user",
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
@@ -223,7 +223,7 @@ async def test_transient_publication_failure_is_retryable(
 
         with (
             patch(
-                "app.services.post.SocialAccountRepository.get_by_platform_for_user",
+                "app.services.publication.SocialAccountRepository.get_by_platform_for_user",
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
@@ -282,7 +282,7 @@ async def test_permanent_publication_failure_marks_post_failed(
 
         with (
             patch(
-                "app.services.post.SocialAccountRepository.get_by_platform_for_user",
+                "app.services.publication.SocialAccountRepository.get_by_platform_for_user",
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(
@@ -347,7 +347,7 @@ async def test_retry_after_transient_failure_publishes_once(
 
         with (
             patch(
-                "app.services.post.SocialAccountRepository.get_by_platform_for_user",
+                "app.services.publication.SocialAccountRepository.get_by_platform_for_user",
                 new=AsyncMock(return_value=fake_social_account),
             ),
             patch(

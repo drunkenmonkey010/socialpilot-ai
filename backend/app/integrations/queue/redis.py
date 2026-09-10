@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,14 +44,24 @@ class RedisQueue:
     async def ping(self) -> bool:
         return bool(await self.client.ping())
 
-    async def enqueue_scheduled_post(
-        self,
+    @staticmethod
+    def _create_job(
         post_id: int,
         user_id: int,
         attempts: int = 0,
         next_retry_at: str | None = None,
-    ) -> None:
-        job = {
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Create a Redis publishing job.
+
+        job_id is the unique identity of this queue job and remains
+        unchanged as the job moves through pending, processing,
+        delayed, and recovery states.
+        """
+
+        return {
+            "job_id": job_id or str(uuid.uuid4()),
             "post_id": post_id,
             "user_id": user_id,
             "claimed_at": None,
@@ -58,15 +69,160 @@ class RedisQueue:
             "next_retry_at": next_retry_at,
         }
 
+    @staticmethod
+    def _parse_job(
+        raw_job: str,
+    ) -> dict[str, Any] | None:
+        try:
+            job = json.loads(raw_job)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(job, dict):
+            return None
+
+        job.setdefault("job_id", None)
+        job.setdefault("attempts", 0)
+        job.setdefault("next_retry_at", None)
+        job.setdefault("claimed_at", None)
+
+        return job
+
+    @staticmethod
+    def _job_matches(
+        raw_job: str,
+        post_id: int,
+        user_id: int,
+    ) -> bool:
+        job = RedisQueue._parse_job(raw_job)
+
+        if job is None:
+            return False
+
+        return (
+            job.get("post_id") == post_id
+            and job.get("user_id") == user_id
+        )
+
+    @staticmethod
+    def _job_id_matches(
+        raw_job: str,
+        job_id: str,
+    ) -> bool:
+        job = RedisQueue._parse_job(raw_job)
+
+        if job is None:
+            return False
+
+        return job.get("job_id") == job_id
+
+    async def has_scheduled_post_job(
+        self,
+        post_id: int,
+        user_id: int,
+    ) -> bool:
+        """
+        Check whether a scheduled publication job exists anywhere
+        in the Redis lifecycle.
+
+        A job may exist in:
+
+            pending
+                ↓
+            processing
+                ↓
+            delayed retry
+
+        Recovery must not create another job if one already exists.
+        """
+
+        pending_jobs = await self.client.lrange(
+            self.queue_name,
+            0,
+            -1,
+        )
+
+        for raw_job in pending_jobs:
+            if self._job_matches(
+                raw_job,
+                post_id,
+                user_id,
+            ):
+                return True
+
+        processing_jobs = await self.client.lrange(
+            self.processing_queue_name,
+            0,
+            -1,
+        )
+
+        for raw_job in processing_jobs:
+            if self._job_matches(
+                raw_job,
+                post_id,
+                user_id,
+            ):
+                return True
+
+        delayed_jobs = await self.client.zrange(
+            self.delayed_queue_name,
+            0,
+            -1,
+        )
+
+        for raw_job in delayed_jobs:
+            if self._job_matches(
+                raw_job,
+                post_id,
+                user_id,
+            ):
+                return True
+
+        return False
+
+    async def enqueue_scheduled_post(
+        self,
+        post_id: int,
+        user_id: int,
+        attempts: int = 0,
+        next_retry_at: str | None = None,
+        job_id: str | None = None,
+    ) -> str:
+        """
+        Enqueue a scheduled publishing job.
+
+        If job_id is supplied, the existing identity is preserved.
+        Otherwise a new UUID is generated.
+
+        Returns:
+            The Redis job ID.
+        """
+
+        job = self._create_job(
+            post_id=post_id,
+            user_id=user_id,
+            attempts=attempts,
+            next_retry_at=next_retry_at,
+            job_id=job_id,
+        )
+
         await self.client.rpush(
             self.queue_name,
             json.dumps(job),
         )
 
+        return job["job_id"]
+
     async def dequeue_scheduled_post(
         self,
         timeout: int = 5,
     ) -> dict[str, Any] | None:
+        """
+        Move one pending job into processing.
+
+        The job_id remains unchanged.
+        """
+
         raw_job = await self.client.brpoplpush(
             self.queue_name,
             self.processing_queue_name,
@@ -76,12 +232,19 @@ class RedisQueue:
         if raw_job is None:
             return None
 
-        job = json.loads(raw_job)
+        job = self._parse_job(raw_job)
 
-        job.setdefault("attempts", 0)
-        job.setdefault("next_retry_at", None)
+        if job is None:
+            await self.client.lrem(
+                self.processing_queue_name,
+                1,
+                raw_job,
+            )
+            return None
 
-        job["claimed_at"] = datetime.now(timezone.utc).isoformat()
+        job["claimed_at"] = datetime.now(
+            timezone.utc,
+        ).isoformat()
 
         updated_job = json.dumps(job)
 
@@ -100,9 +263,15 @@ class RedisQueue:
 
     async def acknowledge_scheduled_post(
         self,
-        post_id: int,
-        user_id: int,
+        job_id: str,
     ) -> bool:
+        """
+        Acknowledge a specific processing job by job_id.
+
+        Using job_id avoids accidentally acknowledging another job
+        belonging to the same post.
+        """
+
         processing_jobs = await self.client.lrange(
             self.processing_queue_name,
             0,
@@ -110,25 +279,25 @@ class RedisQueue:
         )
 
         for raw_job in processing_jobs:
-            try:
-                job = json.loads(raw_job)
-            except json.JSONDecodeError:
+            if not self._job_id_matches(
+                raw_job,
+                job_id,
+            ):
                 continue
 
-            if (
-                job.get("post_id") == post_id
-                and job.get("user_id") == user_id
-            ):
-                removed = await self.client.lrem(
-                    self.processing_queue_name,
-                    1,
-                    raw_job,
-                )
-                return removed > 0
+            removed = await self.client.lrem(
+                self.processing_queue_name,
+                1,
+                raw_job,
+            )
+
+            return removed > 0
 
         return False
 
-    async def get_processing_jobs(self) -> list[dict[str, Any]]:
+    async def get_processing_jobs(
+        self,
+    ) -> list[dict[str, Any]]:
         raw_jobs = await self.client.lrange(
             self.processing_queue_name,
             0,
@@ -138,13 +307,10 @@ class RedisQueue:
         jobs = []
 
         for raw_job in raw_jobs:
-            try:
-                job = json.loads(raw_job)
-            except json.JSONDecodeError:
-                continue
+            job = self._parse_job(raw_job)
 
-            job.setdefault("attempts", 0)
-            job.setdefault("next_retry_at", None)
+            if job is None:
+                continue
 
             jobs.append(job)
 
@@ -152,17 +318,14 @@ class RedisQueue:
 
     async def requeue_scheduled_post(
         self,
-        post_id: int,
-        user_id: int,
+        job_id: str,
         attempts: int,
         next_retry_at: datetime | None,
     ) -> bool:
         """
-        Move a failed scheduled-post job from the processing queue
-        into the delayed retry queue.
+        Move a failed processing job into the delayed retry queue.
 
-        The delayed queue is a Redis sorted set. The retry timestamp
-        is stored as the sorted-set score.
+        The same job_id is preserved.
         """
 
         processing_jobs = await self.client.lrange(
@@ -172,20 +335,18 @@ class RedisQueue:
         )
 
         for raw_job in processing_jobs:
-            try:
-                job = json.loads(raw_job)
-            except json.JSONDecodeError:
+            job = self._parse_job(raw_job)
+
+            if job is None:
                 continue
 
-            if (
-                job.get("post_id") != post_id
-                or job.get("user_id") != user_id
-            ):
+            if job.get("job_id") != job_id:
                 continue
 
             retry_job = {
-                "post_id": post_id,
-                "user_id": user_id,
+                "job_id": job_id,
+                "post_id": job["post_id"],
+                "user_id": job["user_id"],
                 "claimed_at": None,
                 "attempts": attempts,
                 "next_retry_at": (
@@ -195,10 +356,14 @@ class RedisQueue:
                 ),
             }
 
-            retry_job_json = json.dumps(retry_job)
+            retry_job_json = json.dumps(
+                retry_job,
+            )
 
             if next_retry_at is None:
-                score = datetime.now(timezone.utc).timestamp()
+                score = datetime.now(
+                    timezone.utc,
+                ).timestamp()
             else:
                 score = next_retry_at.timestamp()
 
@@ -236,10 +401,12 @@ class RedisQueue:
         Move delayed retry jobs whose retry time has arrived
         into the main scheduled-post queue.
 
-        Returns the number of promoted jobs.
+        The same job_id is preserved.
         """
 
-        now_timestamp = datetime.now(timezone.utc).timestamp()
+        now_timestamp = datetime.now(
+            timezone.utc,
+        ).timestamp()
 
         due_jobs = await self.client.zrangebyscore(
             self.delayed_queue_name,
@@ -252,9 +419,9 @@ class RedisQueue:
         promoted = 0
 
         for raw_job in due_jobs:
-            try:
-                job = json.loads(raw_job)
-            except json.JSONDecodeError:
+            job = self._parse_job(raw_job)
+
+            if job is None:
                 await self.client.zrem(
                     self.delayed_queue_name,
                     raw_job,
@@ -304,13 +471,10 @@ class RedisQueue:
         jobs = []
 
         for raw_job in raw_jobs:
-            try:
-                job = json.loads(raw_job)
-            except json.JSONDecodeError:
-                continue
+            job = self._parse_job(raw_job)
 
-            job.setdefault("attempts", 0)
-            job.setdefault("next_retry_at", None)
+            if job is None:
+                continue
 
             jobs.append(job)
 
@@ -318,14 +482,15 @@ class RedisQueue:
 
     async def recover_scheduled_post(
         self,
-        post_id: int,
-        user_id: int,
+        job_id: str,
         stale_after_seconds: int = 300,
     ) -> bool:
         """
-        Recover one specific stale scheduled-post job.
+        Recover one specific stale processing job.
 
-        The caller is responsible for checking the PostgreSQL state
+        The same job_id is preserved.
+
+        The caller is responsible for checking PostgreSQL state
         before calling this method.
         """
 
@@ -335,18 +500,17 @@ class RedisQueue:
             -1,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(
+            timezone.utc,
+        )
 
         for raw_job in processing_jobs:
-            try:
-                job = json.loads(raw_job)
-            except json.JSONDecodeError:
+            job = self._parse_job(raw_job)
+
+            if job is None:
                 continue
 
-            if (
-                job.get("post_id") != post_id
-                or job.get("user_id") != user_id
-            ):
+            if job.get("job_id") != job_id:
                 continue
 
             claimed_at_raw = job.get("claimed_at")
@@ -375,8 +539,9 @@ class RedisQueue:
                 return False
 
             recovered_job = {
-                "post_id": post_id,
-                "user_id": user_id,
+                "job_id": job_id,
+                "post_id": job["post_id"],
+                "user_id": job["user_id"],
                 "claimed_at": None,
                 "attempts": job.get("attempts", 0),
                 "next_retry_at": job.get("next_retry_at"),

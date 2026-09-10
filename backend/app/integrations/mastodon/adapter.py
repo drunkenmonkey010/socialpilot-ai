@@ -1,3 +1,5 @@
+import httpx
+
 from app.integrations.mastodon.oauth import publish_mastodon_status
 from app.integrations.platforms.base import PlatformPublisher
 from app.integrations.platforms.errors import (
@@ -27,9 +29,6 @@ class MastodonAdapter(PlatformPublisher):
     def capabilities(self) -> PlatformCapabilities:
         """
         Return capabilities currently implemented by this adapter.
-
-        Media support will be enabled only after the adapter implements
-        actual media upload/publication handling.
         """
 
         return PlatformCapabilities(
@@ -90,8 +89,6 @@ class MastodonAdapter(PlatformPublisher):
     ) -> bool:
         """
         Return whether a Mastodon error should be retried.
-
-        The adapter owns interpretation of Mastodon's API failures.
         """
 
         if isinstance(
@@ -115,6 +112,38 @@ class MastodonAdapter(PlatformPublisher):
         return True
 
     @staticmethod
+    def _parse_retry_after(
+        response: httpx.Response,
+    ) -> int | None:
+        """
+        Parse the Retry-After response header.
+
+        Supports the standard integer-seconds form.
+
+        Invalid, missing, or non-positive values are ignored so the
+        worker can fall back to normal exponential backoff.
+        """
+
+        retry_after = response.headers.get(
+            "Retry-After",
+        )
+
+        if retry_after is None:
+            return None
+
+        try:
+            seconds = int(
+                retry_after.strip(),
+            )
+        except ValueError:
+            return None
+
+        if seconds <= 0:
+            return None
+
+        return seconds
+
+    @staticmethod
     def _translate_error(
         exc: Exception,
     ) -> Exception:
@@ -124,12 +153,49 @@ class MastodonAdapter(PlatformPublisher):
 
         if isinstance(
             exc,
+            httpx.HTTPStatusError,
+        ):
+            response = exc.response
+            status_code = response.status_code
+            message = str(exc)
+
+            if status_code in (401, 403):
+                return PlatformAuthenticationError(
+                    message,
+                )
+
+            if status_code == 429:
+                return PlatformRateLimitError(
+                    message,
+                    retry_after_seconds=(
+                        MastodonAdapter._parse_retry_after(
+                            response,
+                        )
+                    ),
+                )
+
+            if 400 <= status_code <= 499:
+                return PlatformPermanentError(
+                    message,
+                )
+
+            if 500 <= status_code <= 599:
+                return PlatformTransientError(
+                    message,
+                )
+
+        if isinstance(
+            exc,
             (
                 TimeoutError,
                 ConnectionError,
+                httpx.TimeoutException,
+                httpx.NetworkError,
             ),
         ):
-            return PlatformTransientError(str(exc))
+            return PlatformTransientError(
+                str(exc),
+            )
 
         message = str(exc)
 
@@ -141,23 +207,35 @@ class MastodonAdapter(PlatformPublisher):
         ]
 
         if not status_codes:
-            return PlatformTransientError(message)
+            return PlatformTransientError(
+                message,
+            )
 
         status_code = status_codes[0]
 
         if status_code in (401, 403):
-            return PlatformAuthenticationError(message)
+            return PlatformAuthenticationError(
+                message,
+            )
 
         if status_code == 429:
-            return PlatformRateLimitError(message)
+            return PlatformRateLimitError(
+                message,
+            )
 
         if 400 <= status_code <= 499:
-            return PlatformPermanentError(message)
+            return PlatformPermanentError(
+                message,
+            )
 
         if 500 <= status_code <= 599:
-            return PlatformTransientError(message)
+            return PlatformTransientError(
+                message,
+            )
 
-        return PlatformPermanentError(message)
+        return PlatformPermanentError(
+            message,
+        )
 
 
 mastodon_adapter = MastodonAdapter()

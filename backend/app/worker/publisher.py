@@ -6,6 +6,7 @@ from app.core.database import AsyncSessionLocal
 from app.integrations.queue.redis import redis_queue
 from app.models.post import PostStatus
 from app.services.post import PostService, ScheduledPublishError
+from app.worker.retry import retry_policy
 
 
 logging.basicConfig(
@@ -14,23 +15,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-
-MAX_ATTEMPTS = 5
-INITIAL_BACKOFF_SECONDS = 30
-
-
-def calculate_backoff(attempt: int) -> int:
-    """
-    Calculate exponential retry backoff.
-
-    Attempt 1 -> 30 seconds
-    Attempt 2 -> 60 seconds
-    Attempt 3 -> 120 seconds
-    Attempt 4 -> 240 seconds
-    """
-
-    return INITIAL_BACKOFF_SECONDS * (2 ** (attempt - 1))
 
 
 async def mark_post_failed(
@@ -87,12 +71,21 @@ async def process_job(
         False -> job was requeued or should remain in processing.
     """
 
+    job_id = job.get("job_id")
     post_id = job.get("post_id")
     user_id = job.get("user_id")
     attempts = job.get("attempts", 0)
 
-    if not isinstance(post_id, int) or not isinstance(user_id, int):
-        logger.error("Invalid Redis job: %s", job)
+    if (
+        not isinstance(job_id, str)
+        or not job_id
+        or not isinstance(post_id, int)
+        or not isinstance(user_id, int)
+    ):
+        logger.error(
+            "Invalid Redis job: %s",
+            job,
+        )
         return True
 
     if not isinstance(attempts, int):
@@ -101,9 +94,11 @@ async def process_job(
     attempts += 1
 
     logger.info(
-        "Publishing attempt %s/%s: post_id=%s user_id=%s",
+        "Publishing attempt %s/%s: "
+        "job_id=%s post_id=%s user_id=%s",
         attempts,
-        MAX_ATTEMPTS,
+        retry_policy.max_attempts,
+        job_id,
         post_id,
         user_id,
     )
@@ -118,7 +113,8 @@ async def process_job(
         if post is None:
             logger.error(
                 "Post not found for Redis job: "
-                "post_id=%s user_id=%s",
+                "job_id=%s post_id=%s user_id=%s",
+                job_id,
                 post_id,
                 user_id,
             )
@@ -126,7 +122,8 @@ async def process_job(
 
         logger.info(
             "Processing scheduled publishing job: "
-            "post_id=%s user_id=%s platform=%s status=%s",
+            "job_id=%s post_id=%s user_id=%s platform=%s status=%s",
+            job_id,
             post.id,
             user_id,
             post.platform,
@@ -136,7 +133,8 @@ async def process_job(
         if post.status == PostStatus.PUBLISHED.value:
             logger.info(
                 "Post is already published. "
-                "Acknowledging Redis job: post_id=%s",
+                "Acknowledging Redis job: job_id=%s post_id=%s",
+                job_id,
                 post.id,
             )
             return True
@@ -144,7 +142,8 @@ async def process_job(
         if post.status != PostStatus.PUBLISHING.value:
             logger.warning(
                 "Skipping Redis job because post is not in publishing state: "
-                "post_id=%s status=%s",
+                "job_id=%s post_id=%s status=%s",
+                job_id,
                 post.id,
                 post.status,
             )
@@ -158,7 +157,9 @@ async def process_job(
             )
 
             logger.info(
-                "Scheduled post published successfully: post_id=%s",
+                "Scheduled post published successfully: "
+                "job_id=%s post_id=%s",
+                job_id,
                 post.id,
             )
 
@@ -168,17 +169,19 @@ async def process_job(
             if not exc.retryable:
                 logger.error(
                     "Permanent scheduled publishing failure: "
-                    "post_id=%s error=%s",
+                    "job_id=%s post_id=%s error=%s",
+                    job_id,
                     post.id,
                     exc,
                 )
 
                 return True
 
-            if attempts >= MAX_ATTEMPTS:
+            if attempts >= retry_policy.max_attempts:
                 logger.error(
                     "Maximum retry attempts reached: "
-                    "post_id=%s attempts=%s",
+                    "job_id=%s post_id=%s attempts=%s",
+                    job_id,
                     post.id,
                     attempts,
                 )
@@ -189,29 +192,50 @@ async def process_job(
 
                 return True
 
-            backoff_seconds = calculate_backoff(
-                attempts,
-            )
+            if exc.retry_after_seconds is not None:
+                backoff_seconds = min(
+                    exc.retry_after_seconds,
+                    retry_policy.max_backoff_seconds,
+                )
+
+                logger.warning(
+                    "Rate-limited publication. "
+                    "Using platform Retry-After: "
+                    "job_id=%s post_id=%s attempt=%s/%s "
+                    "retry_in=%ss",
+                    job_id,
+                    post.id,
+                    attempts,
+                    retry_policy.max_attempts,
+                    backoff_seconds,
+                )
+
+            else:
+                backoff_seconds = (
+                    retry_policy.calculate_retry_delay(
+                        attempts,
+                    )
+                )
+
+                logger.warning(
+                    "Retryable publishing failure: "
+                    "job_id=%s post_id=%s attempt=%s/%s "
+                    "retry_in=%ss error=%s",
+                    job_id,
+                    post.id,
+                    attempts,
+                    retry_policy.max_attempts,
+                    backoff_seconds,
+                    exc,
+                )
 
             retry_at = (
                 datetime.now(timezone.utc)
                 + timedelta(seconds=backoff_seconds)
             )
 
-            logger.warning(
-                "Retryable publishing failure: "
-                "post_id=%s attempt=%s/%s retry_in=%ss retry_at=%s error=%s",
-                post.id,
-                attempts,
-                MAX_ATTEMPTS,
-                backoff_seconds,
-                retry_at.isoformat(),
-                exc,
-            )
-
             requeued = await redis_queue.requeue_scheduled_post(
-                post_id=post_id,
-                user_id=user_id,
+                job_id=job_id,
                 attempts=attempts,
                 next_retry_at=retry_at,
             )
@@ -219,7 +243,8 @@ async def process_job(
             if not requeued:
                 logger.error(
                     "Failed to requeue retryable publishing job: "
-                    "post_id=%s",
+                    "job_id=%s post_id=%s",
+                    job_id,
                     post_id,
                 )
                 return False
@@ -228,7 +253,9 @@ async def process_job(
 
 
 async def worker() -> None:
-    logger.info("SocialPilot Redis publishing worker started.")
+    logger.info(
+        "SocialPilot Redis publishing worker started."
+    )
 
     try:
         while True:
@@ -259,15 +286,24 @@ async def worker() -> None:
             if not completed:
                 continue
 
+            job_id = job.get("job_id")
+
+            if not isinstance(job_id, str) or not job_id:
+                logger.error(
+                    "Cannot acknowledge Redis job without job_id: %s",
+                    job,
+                )
+                continue
+
             acknowledged = await redis_queue.acknowledge_scheduled_post(
-                post_id=job["post_id"],
-                user_id=job["user_id"],
+                job_id=job_id,
             )
 
             if acknowledged:
                 logger.info(
                     "Redis job acknowledged successfully: "
-                    "post_id=%s user_id=%s",
+                    "job_id=%s post_id=%s user_id=%s",
+                    job_id,
                     job["post_id"],
                     job["user_id"],
                 )
@@ -278,12 +314,17 @@ async def worker() -> None:
                 )
 
     except asyncio.CancelledError:
-        logger.info("Redis publishing worker cancelled.")
+        logger.info(
+            "Redis publishing worker cancelled."
+        )
         raise
 
     finally:
         await redis_queue.close()
-        logger.info("Redis publishing worker stopped.")
+
+        logger.info(
+            "Redis publishing worker stopped."
+        )
 
 
 if __name__ == "__main__":

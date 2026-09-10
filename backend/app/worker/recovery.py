@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from app.core.database import AsyncSessionLocal
 from app.integrations.queue.redis import redis_queue
 from app.models.post import PostStatus
+from app.repositories.post import PostRepository
 from app.services.post import PostService
+from app.services.publication import PublicationService
 
 
 logging.basicConfig(
@@ -19,7 +21,75 @@ RECOVERY_INTERVAL_SECONDS = 30
 STALE_AFTER_SECONDS = 300
 
 
-async def recover_jobs() -> None:
+async def reconcile_publishing_post(
+    post_id: int,
+    user_id: int,
+) -> bool:
+    """
+    Attempt to reconcile an ambiguous PUBLISHING post.
+
+    Returns True when the external publication was found and
+    persisted as PUBLISHED.
+
+    Returns False when reconciliation is unsupported or the
+    publication was not found.
+    """
+
+    async with AsyncSessionLocal() as db:
+        post = await PostService.get_post(
+            db,
+            post_id,
+            user_id,
+        )
+
+        if post is None:
+            return False
+
+        if post.status == PostStatus.PUBLISHED.value:
+            return True
+
+        if post.status != PostStatus.PUBLISHING.value:
+            return False
+
+        try:
+            result = await PublicationService.reconcile(
+                db,
+                post,
+                user_id,
+            )
+
+        except Exception:
+            logger.exception(
+                "Publication reconciliation failed: "
+                "post_id=%s user_id=%s platform=%s",
+                post_id,
+                user_id,
+                post.platform,
+            )
+
+            return False
+
+        if result.found and result.external_post_id:
+            logger.warning(
+                "Reconciliation found an existing external publication: "
+                "post_id=%s user_id=%s external_post_id=%s",
+                post_id,
+                user_id,
+                result.external_post_id,
+            )
+
+            return True
+
+        return False
+
+
+async def recover_stale_processing_jobs() -> None:
+    """
+    Recover Redis processing jobs whose worker lease has gone stale.
+
+    PostgreSQL remains the source of truth for the post lifecycle.
+    """
+
     processing_jobs = await redis_queue.get_processing_jobs()
 
     if not processing_jobs:
@@ -31,11 +101,17 @@ async def recover_jobs() -> None:
     )
 
     for job in processing_jobs:
+        job_id = job.get("job_id")
         post_id = job.get("post_id")
         user_id = job.get("user_id")
         claimed_at = job.get("claimed_at")
 
-        if not isinstance(post_id, int) or not isinstance(user_id, int):
+        if (
+            not isinstance(job_id, str)
+            or not job_id
+            or not isinstance(post_id, int)
+            or not isinstance(user_id, int)
+        ):
             logger.error(
                 "Invalid processing job found during recovery: %s",
                 job,
@@ -46,7 +122,9 @@ async def recover_jobs() -> None:
             continue
 
         try:
-            claimed_time = datetime.fromisoformat(claimed_at)
+            claimed_time = datetime.fromisoformat(
+                claimed_at,
+            )
 
             if claimed_time.tzinfo is None:
                 claimed_time = claimed_time.replace(
@@ -77,73 +155,164 @@ async def recover_jobs() -> None:
             if post is None:
                 logger.warning(
                     "Removing Redis job because post no longer exists: "
-                    "post_id=%s user_id=%s",
+                    "job_id=%s post_id=%s user_id=%s",
+                    job_id,
                     post_id,
                     user_id,
                 )
 
                 await redis_queue.acknowledge_scheduled_post(
-                    post_id,
-                    user_id,
+                    job_id=job_id,
                 )
                 continue
 
             if post.status == PostStatus.PUBLISHED.value:
                 logger.info(
                     "Post is already published. Removing stale Redis job: "
-                    "post_id=%s",
+                    "job_id=%s post_id=%s",
+                    job_id,
                     post_id,
                 )
 
                 await redis_queue.acknowledge_scheduled_post(
-                    post_id,
-                    user_id,
+                    job_id=job_id,
                 )
                 continue
 
             if post.status == PostStatus.FAILED.value:
                 logger.info(
                     "Post is already failed. Removing stale Redis job: "
-                    "post_id=%s",
+                    "job_id=%s post_id=%s",
+                    job_id,
                     post_id,
                 )
 
                 await redis_queue.acknowledge_scheduled_post(
-                    post_id,
-                    user_id,
+                    job_id=job_id,
                 )
                 continue
 
             if post.status != PostStatus.PUBLISHING.value:
                 logger.warning(
                     "Removing stale Redis job because post is no longer "
-                    "publishing: post_id=%s status=%s",
+                    "publishing: job_id=%s post_id=%s status=%s",
+                    job_id,
                     post_id,
                     post.status,
                 )
 
                 await redis_queue.acknowledge_scheduled_post(
-                    post_id,
-                    user_id,
+                    job_id=job_id,
                 )
                 continue
 
+        # The worker may have successfully published externally and
+        # crashed before recording external_post_id.
+        #
+        # Reconcile before allowing another external publication attempt.
+        reconciled = await reconcile_publishing_post(
+            post_id,
+            user_id,
+        )
+
+        if reconciled:
+            await redis_queue.acknowledge_scheduled_post(
+                job_id=job_id,
+            )
+            continue
+
         recovered = await redis_queue.recover_scheduled_post(
-            post_id=post_id,
-            user_id=user_id,
+            job_id=job_id,
             stale_after_seconds=STALE_AFTER_SECONDS,
         )
 
         if recovered:
             logger.warning(
-                "Recovered stale Redis job: post_id=%s user_id=%s",
+                "Recovered stale Redis job after reconciliation: "
+                "job_id=%s post_id=%s user_id=%s",
+                job_id,
                 post_id,
                 user_id,
             )
 
 
+async def recover_missing_redis_jobs() -> None:
+    """
+    Recover PUBLISHING posts that have no corresponding Redis job.
+
+    Before creating a new Redis job, reconciliation is attempted so
+    a successful external publication whose response was lost does
+    not automatically become a duplicate publication.
+    """
+
+    async with AsyncSessionLocal() as db:
+        publishing_posts = await PostRepository.get_publishing_posts(
+            db,
+        )
+
+    if not publishing_posts:
+        return
+
+    logger.info(
+        "Checking %s PUBLISHING post(s) for missing Redis jobs.",
+        len(publishing_posts),
+    )
+
+    for post, user_id in publishing_posts:
+        try:
+            has_job = await redis_queue.has_scheduled_post_job(
+                post_id=post.id,
+                user_id=user_id,
+            )
+
+            if has_job:
+                continue
+
+            # First determine whether the external publication already
+            # exists before creating another publication attempt.
+            reconciled = await reconcile_publishing_post(
+                post.id,
+                user_id,
+            )
+
+            if reconciled:
+                continue
+
+            job_id = await redis_queue.enqueue_scheduled_post(
+                post_id=post.id,
+                user_id=user_id,
+                attempts=post.publication_attempts,
+            )
+
+            logger.warning(
+                "Recovered PUBLISHING post with no Redis job: "
+                "job_id=%s post_id=%s user_id=%s platform=%s",
+                job_id,
+                post.id,
+                user_id,
+                post.platform,
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to recover missing Redis job: "
+                "post_id=%s user_id=%s",
+                post.id,
+                user_id,
+            )
+
+
+async def recover_jobs() -> None:
+    """Run all Redis publishing recovery checks."""
+
+    await recover_stale_processing_jobs()
+    await recover_missing_redis_jobs()
+
+
 async def worker() -> None:
-    logger.info("SocialPilot Redis recovery worker started.")
+    logger.info(
+        "SocialPilot Redis recovery worker started.",
+    )
 
     try:
         while True:
@@ -160,12 +329,17 @@ async def worker() -> None:
             )
 
     except asyncio.CancelledError:
-        logger.info("Redis recovery worker cancelled.")
+        logger.info(
+            "Redis recovery worker cancelled.",
+        )
         raise
 
     finally:
         await redis_queue.close()
-        logger.info("Redis recovery worker stopped.")
+
+        logger.info(
+            "Redis recovery worker stopped.",
+        )
 
 
 if __name__ == "__main__":

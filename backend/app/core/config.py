@@ -73,9 +73,16 @@ class Settings(BaseSettings):
 
     instagram_app_id: str | None = None
     instagram_app_secret: str | None = None
+
     instagram_redirect_uri: str = (
         "http://localhost:8000/social-accounts/instagram/callback"
     )
+
+    instagram_api_base_url: str = (
+        "https://graph.instagram.com/v24.0"
+    )
+
+    instagram_access_token: str | None = None
 
     # ============================================================
     # Mastodon

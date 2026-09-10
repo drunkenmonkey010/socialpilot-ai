@@ -46,6 +46,27 @@ class SocialAccountService:
         )
 
     @staticmethod
+    async def get_account_by_platform_and_account_id(
+        db: AsyncSession,
+        user_id: int,
+        platform: str,
+        account_id: str,
+    ) -> SocialAccount | None:
+        """
+        Find a user's social account by platform and external account ID.
+
+        This is used by OAuth callbacks to make the connection
+        operation idempotent.
+        """
+
+        return await SocialAccountRepository.get_by_platform_and_account_id(
+            db,
+            user_id,
+            platform,
+            account_id,
+        )
+
+    @staticmethod
     async def get_user_accounts(
         db: AsyncSession,
         user_id: int,

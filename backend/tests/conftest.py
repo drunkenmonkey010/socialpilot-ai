@@ -24,9 +24,8 @@ async def client():
         yield async_client
 
 
-@pytest_asyncio.fixture
-async def test_user():
-    """Create a unique test user and remove it after the test."""
+async def _create_test_user():
+    """Create a unique test user and return its authentication details."""
 
     email = f"pytest-{uuid.uuid4().hex}@example.com"
     password = "secret123"
@@ -41,19 +40,85 @@ async def test_user():
         await session.commit()
         await session.refresh(user)
 
-        user_id = user.id
+        return {
+            "id": user.id,
+            "email": email,
+            "password": password,
+        }
 
-    yield {
-        "id": user_id,
-        "email": email,
-        "password": password,
-    }
+
+async def _delete_test_user(user_id: int):
+    """Delete a test user and its owned data."""
 
     async with AsyncSessionLocal() as session:
         await session.execute(
             delete(User).where(User.id == user_id)
         )
         await session.commit()
+
+
+@pytest_asyncio.fixture
+async def test_user():
+    """Create a unique test user and remove it after the test."""
+
+    user = await _create_test_user()
+
+    yield user
+
+    await _delete_test_user(user["id"])
+
+
+@pytest_asyncio.fixture
+async def second_user():
+    """Create a second unique user for ownership/authorization tests."""
+
+    user = await _create_test_user()
+
+    yield user
+
+    await _delete_test_user(user["id"])
+
+
+@pytest_asyncio.fixture
+async def auth_headers(client, test_user):
+    """Return Bearer authentication headers for the primary test user."""
+
+    response = await client.post(
+        "/auth/login",
+        json={
+            "email": test_user["email"],
+            "password": test_user["password"],
+        },
+    )
+
+    assert response.status_code == 200
+
+    token = response.json()["access_token"]
+
+    return {
+        "Authorization": f"Bearer {token}",
+    }
+
+
+@pytest_asyncio.fixture
+async def second_auth_headers(client, second_user):
+    """Return Bearer authentication headers for the second test user."""
+
+    response = await client.post(
+        "/auth/login",
+        json={
+            "email": second_user["email"],
+            "password": second_user["password"],
+        },
+    )
+
+    assert response.status_code == 200
+
+    token = response.json()["access_token"]
+
+    return {
+        "Authorization": f"Bearer {token}",
+    }
 
 
 @pytest_asyncio.fixture(autouse=True)

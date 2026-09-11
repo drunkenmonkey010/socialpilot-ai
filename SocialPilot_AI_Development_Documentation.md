@@ -761,34 +761,35 @@ post was successfully created.
 
 Current architecture
 
-                 USER
-                   │
-                   ↓
-             FastAPI API
-                   │
-     ┌─────────────┼─────────────┐
-     ↓             ↓             ↓
-   Auth      Brand/Campaign     Posts
-     │             │             │
-     │             │        PostService
-     │             │             │
-     │             └─────────────┤
-     │                           ↓
-     │                    PostRepository
-     │                           │
-     └───────────────────────────┤
-                                 ↓
-                            PostgreSQL
-                                 │
-                      ┌──────────┴──────────┐
-                      ↓                     ↓
-               SocialAccount              Posts
-                      │
-                      ↓
-            Mastodon Integration
-                      │
-                      ↓
-                 Mastodon API
+             USER
+               │
+               ↓
+         FastAPI API
+               │
+ ┌─────────────┼─────────────┐
+ ↓             ↓             ↓
+
+Auth      Brand/Campaign     Posts
+│             │             │
+│             │        PostService
+│             │             │
+│             └─────────────┤
+│                           ↓
+│                    PostRepository
+│                           │
+└───────────────────────────┤
+↓
+PostgreSQL
+│
+┌──────────┴──────────┐
+↓                     ↓
+SocialAccount              Posts
+│
+↓
+Mastodon Integration
+│
+↓
+Mastodon API
 
 Future AI architecture
 
@@ -2084,7 +2085,7 @@ Redis reliability improvements
 The queue system now contains:
 
 socialpilot
-socialpilot:scheduled_posts
+socialpilot
 
 The processing queue allows a job to remain visible while a worker is handling it.
 
@@ -2167,57 +2168,58 @@ The AI does not receive permission to bypass the Human-in-the-Loop boundary.
 
 Current architecture after scheduling and retry work
 
-                 USER
-                   │
-                   ▼
-             FastAPI API
-                   │
-  ┌────────────────┼────────────────┐
-  │                │                │
-  ▼                ▼                ▼
+             USER
+               │
+               ▼
+         FastAPI API
+               │
+
+┌────────────────┼────────────────┐
+│                │                │
+▼                ▼                ▼
 Auth       Brand/Campaign          Posts
-                                     │
-                                     ▼
-                               PostService
-                                     │
-                 ┌───────────────────┼───────────────────┐
-                 │                   │                   │
-                 ▼                   ▼                   ▼
-               AI                 Review             Schedule
-            generation           / approval              │
-                 │                   │                   ▼
-                 └──────────► DRAFT / APPROVED     PostgreSQL
-                                                       │
-                                                       ▼
-                                                Atomic claim
-                                                       │
-                                                       ▼
-                                                Redis queue
-                                                       │
-                                                       ▼
-                                           Redis processing queue
-                                                       │
-                                                       ▼
-                                             Publisher worker
-                                                       │
-                                     ┌─────────────────┴───────────────┐
-                                     │                                 │
-                                     ▼                                 ▼
-                                 Success                            Failure
-                                     │                                 │
-                                     ▼                                 ▼
-                                PUBLISHED                    classify failure
-                                     │                         │          │
-                                     │                    permanent    retryable
-                                     │                         │          │
-                                     │                         ▼          ▼
-                                     │                      FAILED    delayed retry
-                                     │                                    │
-                                     │                                    ▼
-                                     │                              retry promoter
-                                     │                                    │
-                                     │                                    ▼
-                                     └──────────────────────────── Redis queue
+│
+▼
+PostService
+│
+┌───────────────────┼───────────────────┐
+│                   │                   │
+▼                   ▼                   ▼
+AI                 Review             Schedule
+generation           / approval              │
+│                   │                   ▼
+└──────────► DRAFT / APPROVED     PostgreSQL
+│
+▼
+Atomic claim
+│
+▼
+Redis queue
+│
+▼
+Redis processing queue
+│
+▼
+Publisher worker
+│
+┌─────────────────┴───────────────┐
+│                                 │
+▼                                 ▼
+Success                            Failure
+│                                 │
+▼                                 ▼
+PUBLISHED                    classify failure
+│                         │          │
+│                    permanent    retryable
+│                         │          │
+│                         ▼          ▼
+│                      FAILED    delayed retry
+│                                    │
+│                                    ▼
+│                              retry promoter
+│                                    │
+│                                    ▼
+└──────────────────────────── Redis queue
 
 This architecture preserves the separation between:
 
@@ -2426,37 +2428,37 @@ The project has moved from a simple CRUD/social-account prototype toward a real 
 
 The current architecture is:
 
-                SOCIALPILOT AI
+            SOCIALPILOT AI
 
-                     USER
-                      ↓
-               Campaign context
-                      ↓
-                AI generation
-                      ↓
-                    DRAFT
-                      ↓
-               HUMAN REVIEW
-                      ↓
-                   APPROVE
-                      ↓
-                  SCHEDULE
-                      ↓
-             PostgreSQL scheduler
-                      ↓
-                Redis queue
-                      ↓
-              Publisher worker
-                      ↓
-             Retry / recovery
-                      ↓
-              Platform adapter
-                      ↓
-                 Mastodon
-                      ↓
-                PUBLISHED
-                      ↓
-              Analytics/feedback
+                 USER
+                  ↓
+           Campaign context
+                  ↓
+            AI generation
+                  ↓
+                DRAFT
+                  ↓
+           HUMAN REVIEW
+                  ↓
+               APPROVE
+                  ↓
+              SCHEDULE
+                  ↓
+         PostgreSQL scheduler
+                  ↓
+            Redis queue
+                  ↓
+          Publisher worker
+                  ↓
+         Retry / recovery
+                  ↓
+          Platform adapter
+                  ↓
+             Mastodon
+                  ↓
+            PUBLISHED
+                  ↓
+          Analytics/feedback
 
 The long-term agentic architecture remains:
 
@@ -2723,43 +2725,43 @@ Deployment                             ⏳
 
 Current architecture
 
-                     USER
-                       │
-                       ▼
-                 FastAPI API
-                       │
-      ┌────────────────┼────────────────┐
-      ▼                ▼                ▼
-    Auth        Brand/Campaign        Posts
-                                         │
-                                         ▼
-                                   PostService
-                                         │
-                ┌────────────────────────┼──────────────────────┐
-                ▼                        ▼                      ▼
-           AI generation          HITL review             Scheduling
-                │                        │                      │
-                └──────────────► DRAFT / APPROVED             ▼
-                                                              PostgreSQL
-                                                                  │
-                                                                  ▼
-                                                           Redis queues
-                                                                  │
-                                                                  ▼
-                                                           Publisher worker
-                                                                  │
-                                                                  ▼
-                                                         PublicationService
-                                                                  │
-                                                                  ▼
-                                                          PlatformRegistry
-                                                                  │
-                                         ┌────────────────────────┴──────────────┐
-                                         ▼                                       ▼
-                                  MastodonAdapter                         InstagramAdapter
-                                         │                                       │
-                                         ▼                                       ▼
-                                   Mastodon API                           Instagram API
+                 USER
+                   │
+                   ▼
+             FastAPI API
+                   │
+  ┌────────────────┼────────────────┐
+  ▼                ▼                ▼
+Auth        Brand/Campaign        Posts
+                                     │
+                                     ▼
+                               PostService
+                                     │
+            ┌────────────────────────┼──────────────────────┐
+            ▼                        ▼                      ▼
+       AI generation          HITL review             Scheduling
+            │                        │                      │
+            └──────────────► DRAFT / APPROVED             ▼
+                                                          PostgreSQL
+                                                              │
+                                                              ▼
+                                                       Redis queues
+                                                              │
+                                                              ▼
+                                                       Publisher worker
+                                                              │
+                                                              ▼
+                                                     PublicationService
+                                                              │
+                                                              ▼
+                                                      PlatformRegistry
+                                                              │
+                                     ┌────────────────────────┴──────────────┐
+                                     ▼                                       ▼
+                              MastodonAdapter                         InstagramAdapter
+                                     │                                       │
+                                     ▼                                       ▼
+                               Mastodon API                           Instagram API
 
 The Human-in-the-Loop boundary remains mandatory:
 
@@ -2836,7 +2838,7 @@ The project continues to prioritize: modular architecture, low coupling, durable
 
 Last confirmed major milestone: September 10, 2026 — Instagram OAuth was connected and verified end-to-end using the real Meta/Instagram environment, including HTTPS callback handling, authorization-code exchange, long-lived token exchange, account verification, and SocialAccount persistence. The automated test suite remained green at 70 passing tests.
 
-59. Publishing idempotency — completed
+Publishing idempotency — completed
 
 Confirmed: September 11, 2026
 
@@ -2901,7 +2903,7 @@ PUBLISHED
 This is an important reliability boundary because external publication can
 succeed even when the worker does not receive or persist the response.
 
-60. Scheduling and retry hardening — completed
+Scheduling and retry hardening — completed
 
 Confirmed: September 11, 2026
 
@@ -2966,7 +2968,7 @@ The initial Redis dequeue/claim flow moves a job into the processing queue
 and then updates its claimed_at metadata. That metadata update is not fully
 atomic with the initial queue move and remains a production-hardening item.
 
-61. Dead-letter queue and failure management — completed
+Dead-letter queue and failure management — completed
 
 Confirmed: September 11, 2026
 
@@ -2976,9 +2978,9 @@ lost after retry exhaustion or permanent platform failure.
 Redis queues:
 
 socialpilot
-socialpilot:scheduled_posts
-socialpilot:scheduled_posts
-socialpilot:scheduled_posts
+socialpilot
+socialpilot
+socialpilot
 
 The publisher worker distinguishes:
 
@@ -3035,7 +3037,7 @@ missing processing jobs
 
 retryable rate-limit behavior
 
-62. Security hardening — OAuth encryption and secret validation
+Security hardening — OAuth encryption and secret validation
 
 Confirmed: September 11, 2026
 
@@ -3129,7 +3131,7 @@ OAuth credentials must never be committed to Git or printed in logs.
 
 The project's .env file remains ignored by Git.
 
-63. Security verification and regression status
+Security verification and regression status
 
 Confirmed: September 11, 2026
 
@@ -3171,7 +3173,7 @@ Git working tree clean                            VERIFIED
 Remote branch synchronized                        VERIFIED
 79 automated tests                                PASSING
 
-64. Current verified project status — September 11, 2026
+Current verified project status — September 11, 2026
 
 The current backend has progressed substantially beyond the original
 CRUD/social-account prototype.
@@ -3224,58 +3226,59 @@ X/Twitter remains intentionally deferred during development because of
 API cost/access considerations. It should be added later without changing
 the generic publisher architecture.
 
-65. Current architecture — September 11, 2026
+Current architecture — September 11, 2026
 
-                     USER
-                       │
-                       ▼
-                  FastAPI API
-                       │
-      ┌────────────────┼────────────────┐
-      ▼                ▼                ▼
-    Auth        Brand/Campaign        Posts
-                                         │
-                                         ▼
-                                   PostService
-                                         │
-                ┌────────────────────────┼──────────────────────┐
-                ▼                        ▼                      ▼
-           AI generation          HITL review             Scheduling
-                │                        │                      │
-                ▼                        ▼                      ▼
-              DRAFT                APPROVAL GATE          PostgreSQL
-                                         │                      │
-                                         ▼                      ▼
-                                     APPROVED              Atomic claim
-                                                                │
-                                                                ▼
-                                                           Redis queues
-                                                                │
-                                  ┌─────────────────────────────┤
-                                  ▼                             ▼
-                            Delayed retry                 Processing queue
-                                  │                             │
-                                  ▼                             ▼
-                            Retry promoter               Publisher worker
-                                                                │
-                                                                ▼
-                                                      PublicationService
-                                                                │
-                                                                ▼
-                                                        PlatformRegistry
-                                                                │
-                                         ┌──────────────────────┴─────────────┐
-                                         ▼                                    ▼
-                                  MastodonAdapter                       InstagramAdapter
-                                         │                                    │
-                                         ▼                                    ▼
-                                  Mastodon API                         Instagram API
-                                         │
-                                         ▼
-                                    PUBLISHED
-                                         │
-                                         ▼
-                                external_post_id
+             USER
+               │
+               ▼
+          FastAPI API
+               │
+
+┌────────────────┼────────────────┐
+▼                ▼                ▼
+Auth        Brand/Campaign        Posts
+│
+▼
+PostService
+│
+┌────────────────────────┼──────────────────────┐
+▼                        ▼                      ▼
+AI generation          HITL review             Scheduling
+│                        │                      │
+▼                        ▼                      ▼
+DRAFT                APPROVAL GATE          PostgreSQL
+│                      │
+▼                      ▼
+APPROVED              Atomic claim
+│
+▼
+Redis queues
+│
+┌─────────────────────────────┤
+▼                             ▼
+Delayed retry                 Processing queue
+│                             │
+▼                             ▼
+Retry promoter               Publisher worker
+│
+▼
+PublicationService
+│
+▼
+PlatformRegistry
+│
+┌──────────────────────┴─────────────┐
+▼                                    ▼
+MastodonAdapter                       InstagramAdapter
+│                                    │
+▼                                    ▼
+Mastodon API                         Instagram API
+│
+▼
+PUBLISHED
+│
+▼
+external_post_id
 
 The architecture maintains clear separation between:
 
@@ -3311,7 +3314,7 @@ SCHEDULE / PUBLISH
 
 AI cannot approve or publish its own generated content.
 
-66. Current production-hardening backlog
+Current production-hardening backlog
 
 The major V1 reliability milestones are now substantially implemented.
 
@@ -3396,7 +3399,7 @@ advanced agentic workflows
 X/Twitter remains deferred during development because of API cost/access
 considerations.
 
-67. Updated V1 roadmap
+Updated V1 roadmap
 
 The current development order is:
 
@@ -3446,7 +3449,7 @@ security
 auditability
 Human-in-the-Loop safety
 
-68. Latest Git checkpoint
+Latest Git checkpoint
 
 Latest confirmed commit:
 
@@ -3476,7 +3479,7 @@ python -m py_compile <changed Python files>
 A Git checkpoint should only be marked confirmed when the actual terminal
 output shows both the expected commit and a clean/synchronized working tree.
 
-69. Living-document rule — updated
+Living-document rule — updated
 
 After every major milestone, this document must record:
 
@@ -3510,7 +3513,7 @@ document the new decision afterward rather than rewriting history.
 The current authoritative development state is the latest dated section of
 this document.
 
-70. Current project checkpoint
+Current project checkpoint
 
 Date: September 11, 2026
 
@@ -3571,3 +3574,656 @@ AI may generate, analyze, recommend, rewrite, adapt, and optimize.
 
 AI must not silently cross the Human-in-the-Loop approval boundary to create
 an externally visible side effect.
+
+Current authoritative project update — September 12, 2026
+
+This section supersedes earlier "current status", roadmap, and next-step
+statements where they conflict with the implementation actually verified
+after September 11, 2026. Historical sections above are intentionally
+preserved.
+
+Latest verified backend state:
+
+Authentication                         COMPLETED
+User/brand/campaign ownership          COMPLETED
+Post lifecycle                         COMPLETED
+Human-in-the-Loop approval             COMPLETED
+AI generation                          COMPLETED
+Mastodon OAuth                         COMPLETED
+Mastodon real publishing               COMPLETED
+Instagram OAuth                        COMPLETED
+Instagram account verification         COMPLETED
+Generic platform abstraction           COMPLETED
+Publishing persistence                 COMPLETED
+Publishing idempotency                 COMPLETED
+PostgreSQL scheduling                  COMPLETED
+Redis queue processing                 COMPLETED
+Stale-job recovery                     COMPLETED
+Delayed retries                        COMPLETED
+Exponential backoff                    COMPLETED
+Retry jitter                           COMPLETED
+Retry-After support                    COMPLETED
+Dead-letter failure management         COMPLETED
+OAuth credential encryption            COMPLETED
+JWT secret hardening                   COMPLETED
+API error standardization              COMPLETED
+Request correlation IDs                COMPLETED
+Request timing/logging                 COMPLETED
+Database/model alignment               COMPLETED
+Alembic migration-chain verification   COMPLETED
+Comprehensive V1 tests                 IN PROGRESS
+
+Intentional limitation:
+
+Instagram text-only publishing is not enabled because the current Post model
+does not yet contain media/asset support. The generic Instagram adapter rejects
+unsupported text-only publication rather than creating an invalid external
+publication.
+
+X/Twitter remains intentionally deferred during development because of API
+cost/access considerations.
+
+Additional platforms, analytics, autonomous posting, and frontend work remain
+outside the immediate reliability path.
+
+API error standardization — completed
+
+Confirmed during the September 11, 2026 development checkpoint.
+
+A centralized API error-handling layer was implemented.
+
+Files:
+
+app/api/errors.py
+app/api/middleware.py
+app/main.py
+tests/test_auth.py
+tests/test_observability.py
+
+The standardized API error structure is:
+
+{
+"error": {
+"code": "<MACHINE_READABLE_CODE>",
+"message": "<SAFE_USER_FACING_MESSAGE>"
+}
+}
+
+Validation errors additionally expose structured validation details.
+
+Supported stable error categories include:
+
+400 BAD_REQUEST
+401 UNAUTHORIZED
+403 FORBIDDEN
+404 NOT_FOUND
+409 CONFLICT
+422 VALIDATION_ERROR
+429 RATE_LIMITED
+500 INTERNAL_SERVER_ERROR
+502 BAD_GATEWAY
+503 SERVICE_UNAVAILABLE
+504 GATEWAY_TIMEOUT
+
+Unexpected exceptions are logged server-side while the API returns a safe
+generic 500 response without exposing internal implementation details.
+
+Observability — completed
+
+Confirmed during the September 11, 2026 development checkpoint.
+
+The API now assigns a request correlation ID to every request.
+
+Behavior:
+
+Client supplies X-Request-ID
+↓
+API preserves the ID
+↓
+request.state.request_id
+↓
+request logging
+↓
+response includes X-Request-ID
+
+If the client does not provide an ID, the application generates a UUID.
+
+Request logs include:
+
+request_id
+HTTP method
+path
+status code
+duration_ms
+
+Unexpected API exceptions are also logged with exception information.
+
+Files:
+
+app/api/middleware.py
+app/core/logging.py
+app/api/errors.py
+app/main.py
+tests/test_observability.py
+
+Verification includes:
+
+request IDs are present;
+client-provided IDs are preserved;
+generated IDs differ across requests;
+completed requests produce observability logs;
+standardized error responses retain request correlation.
+
+Security hardening — completed
+
+Confirmed and committed as:
+
+c91cb3a feat: harden OAuth credential security
+
+Implemented security controls include:
+
+Fernet-based OAuth token encryption at rest.
+
+TOKEN_ENCRYPTION_KEY configuration.
+
+JWT secret minimum-length validation.
+
+Rejection of the known development-only JWT secret.
+
+SQLAlchemy SQL echo disabled so sensitive values are not unnecessarily written
+to logs.
+
+Existing social-account records were migrated from plaintext credential
+storage to encrypted storage.
+
+A double-encryption issue encountered during migration was detected and
+repaired before completion.
+
+The API continues to exclude access_token and refresh_token from normal
+SocialAccount responses.
+
+Database migration and Alembic verification — completed
+
+Confirmed September 12, 2026.
+
+Alembic is configured for the existing PostgreSQL database and uses:
+
+migrations/env.py
+target_metadata = Base.metadata
+
+The migration history is a single linear chain with one head:
+
+4b42d7984e51
+↓
+b997374496db
+↓
+7d0c6afb1202
+↓
+258587792be4
+↓
+9f31b34c1261
+↓
+6eb26de38e4e
+↓
+5f8a1c2d9e31
+↓
+6a91d4e7c2b0
+
+Verified:
+
+alembic current
+6a91d4e7c2b0 (head)
+
+alembic heads
+6a91d4e7c2b0 (head)
+
+There is exactly one migration head.
+
+Model/schema alignment was required because Alembic initially detected type
+and index differences between the live database and SQLAlchemy metadata.
+
+The following models were aligned:
+
+app/models/user.py
+app/models/brand.py
+app/models/campaign.py
+app/models/post.py
+app/models/social_account.py
+
+Important alignment decisions:
+
+User/Brand/Campaign fields that already exist as BIGINT in PostgreSQL were
+modeled as BigInteger.
+
+Existing named indexes such as:
+
+idx_brands_user_id
+idx_campaigns_brand_id
+
+were preserved rather than replaced with automatically generated names.
+
+posts.campaign_id remains INTEGER because the existing database column is
+INTEGER.
+
+social_accounts.user_id remains INTEGER because the existing database column
+is INTEGER.
+
+Final verification:
+
+No new upgrade operations detected.
+
+No additional schema-changing migration was required for these model
+corrections.
+
+Comprehensive V1 test baseline — in progress
+
+The automated suite currently contains:
+
+84 passing tests
+
+Latest verification:
+
+python -m pytest -q
+
+Result:
+
+84 passed
+
+The suite remained green through the database-model alignment work.
+
+The comprehensive V1 testing phase will expand coverage rather than rewrite
+the existing suite.
+
+Priority areas:
+
+authentication;
+authorization;
+ownership isolation;
+brand/campaign access;
+post lifecycle;
+Human-in-the-Loop enforcement;
+publishing idempotency;
+durable Publication state;
+retry classification;
+retry exhaustion;
+dead-letter queue behavior;
+stale-job recovery;
+scheduling/reconciliation;
+platform registry;
+Mastodon adapter behavior;
+Instagram OAuth;
+encrypted credential behavior;
+standardized API errors;
+request correlation IDs;
+AI generation failure handling;
+health/readiness behavior.
+
+The goal is to verify successful paths as well as failure, recovery, security,
+concurrency, and duplicate-execution scenarios.
+
+Current publication architecture
+
+The current publication architecture is:
+
+PostService
+↓
+PublicationService
+↓
+PlatformRegistry
+↓
+PlatformPublisher
+├── MastodonAdapter
+└── InstagramAdapter
+↓
+future adapters
+
+The application core should not contain platform-specific HTTP branches.
+
+Publication state is persisted separately from the logical Post so that one
+logical post can eventually target multiple social accounts/platforms.
+
+The Publication model contains durable state including:
+
+post_id
+social_account_id
+platform
+publication_key
+status
+attempt_count
+external_post_id
+last_error
+retry_after_seconds
+first_attempt_at
+last_attempt_at
+published_at
+publication_metadata
+
+The uniqueness rule for:
+
+post_id + social_account_id
+
+prevents duplicate durable publication records for the same logical
+Post-to-SocialAccount relationship.
+
+Current scheduling and failure architecture
+
+PostgreSQL remains the source of truth for publication state.
+
+The scheduled publishing flow is:
+
+APPROVED
+↓
+SCHEDULED
+↓
+PostgreSQL due-post detection
+↓
+atomic SCHEDULED → PUBLISHING claim
+↓
+Redis scheduled-post queue
+↓
+Redis processing queue
+↓
+Publisher worker
+↓
+Platform adapter
+↓
+External platform
+↓
+PUBLISHED
+↓
+Redis acknowledgement
+
+Failure paths:
+
+Retryable failure
+↓
+retry metadata
+↓
+delayed Redis queue
+↓
+retry promoter
+↓
+main Redis queue
+↓
+publisher
+
+Permanent failure / retry exhaustion
+↓
+Post FAILED
+↓
+Redis dead-letter queue
+
+Worker crash:
+
+processing queue
+↓
+stale claimed_at
+↓
+recovery worker
+↓
+check PostgreSQL state
+├── PUBLISHED → remove/ack job
+├── FAILED    → remove/ack job
+├── invalid   → remove/ack job
+└── PUBLISHING → recover/requeue
+
+The recovery logic fails closed when reconciliation cannot determine the
+external state. An unknown external state must not automatically trigger a
+duplicate publication.
+
+Current retry and DLQ policy
+
+RetryPolicy currently supports:
+
+maximum attempts: 5
+initial backoff: 30 seconds
+maximum backoff: 15 minutes
+jitter ratio: 20 percent
+
+Exponential backoff examples:
+
+Attempt 1 → 30 seconds
+Attempt 2 → 60 seconds
+Attempt 3 → 120 seconds
+Attempt 4 → 240 seconds
+
+Platform-provided retry timing is respected when available, subject to the
+configured maximum backoff.
+
+Retryable failures are delayed rather than immediately requeued.
+
+Permanent failures and exhausted retry attempts are moved to the dead-letter
+queue with failure metadata.
+
+Redis job IDs remain stable across queue transitions so retries, recovery, and
+DLQ handling continue to refer to the same logical job.
+
+Current Git checkpoint
+
+Latest confirmed commit:
+
+7959630 fix: align models with database schema
+
+The commit was pushed successfully to:
+
+origin/dev
+
+Verification:
+
+git status
+
+Result:
+
+On branch dev
+Your branch is up to date with 'origin/dev'.
+nothing to commit, working tree clean
+
+Recent history includes:
+
+7959630 fix: align models with database schema
+a67d755 feat: standardize API errors and add observability
+c91cb3a feat: harden OAuth credential security
+49b761d feat: add publishing dead letter queue
+89ed0af fix: harden scheduling recovery reconciliation
+417345d feat: complete Instagram OAuth integration
+af865bd feat: complete multi-platform publication architecture
+
+Authoritative V1 roadmap
+
+The implementation order is now:
+
+Publishing idempotency                         COMPLETED
+
+Durable publication/audit state                COMPLETED
+
+Multi-platform publication architecture        COMPLETED
+
+Instagram OAuth                                COMPLETED
+
+Scheduling hardening/reconciliation             COMPLETED
+
+DLQ/failure management                          COMPLETED
+
+Security hardening                              COMPLETED
+
+API error standardization                       COMPLETED
+
+Observability                                   COMPLETED
+
+DB/Alembic model and migration verification   COMPLETED
+
+Comprehensive V1 tests                         NEXT
+
+Health/readiness/version/API cleanup           PENDING
+
+Deployment                                     PENDING
+
+The following remain intentionally outside the immediate V1 reliability path:
+
+X/Twitter integration
+additional social platforms
+analytics
+autonomous posting
+frontend implementation
+Instagram media publishing
+
+Current architecture invariant
+
+The central safety boundary remains unchanged:
+
+Campaign context
+↓
+AI generation
+↓
+DRAFT
+↓
+PENDING_REVIEW
+↓
+HUMAN REVIEW
+├── REJECT → revise/regenerate
+└── APPROVE
+↓
+APPROVED
+↓
+SCHEDULED
+↓
+PUBLISHING
+↓
+PUBLISHED
+
+AI may:
+
+generate;
+analyze;
+recommend;
+rewrite;
+adapt;
+summarize;
+optimize.
+
+AI must not silently cross the Human-in-the-Loop approval boundary to create
+an externally visible side effect.
+
+Every externally visible operation must continue to have:
+
+state management;
+ownership checks;
+validation;
+failure handling;
+retry/recovery behavior where appropriate;
+idempotency considerations;
+auditability.
+
+Current definition of done
+
+A feature is not considered complete merely because an endpoint returns 200.
+
+For externally connected functionality:
+
+Implementation
+↓
+Import/unit validation
+↓
+API validation
+↓
+Database validation
+↓
+External integration validation where applicable
+↓
+Failure-path testing
+↓
+Security review
+↓
+Documentation update
+↓
+Git commit/push
+↓
+Clean working tree
+
+For database changes, additionally verify:
+
+alembic current
+alembic heads
+alembic history --verbose
+alembic check
+
+No migration should be generated solely to silence Alembic. The intended
+database schema and SQLAlchemy metadata must be understood first.
+
+Next development checkpoint
+
+The immediate next milestone is:
+
+COMPREHENSIVE V1 TESTS
+
+The first step is to inventory the existing test suite and map current tests
+to the V1 reliability requirements.
+
+Priority should be given to missing negative-path coverage rather than simply
+adding more happy-path tests.
+
+The next test work should specifically protect:
+
+HITL approval as a mandatory boundary;
+ownership isolation;
+publication idempotency;
+durable Publication state;
+retry/DLQ transitions;
+reconciliation safety;
+OAuth credential secrecy;
+API error contracts;
+request correlation;
+AI failure safety;
+platform abstraction.
+
+Latest verified checkpoint summary
+
+Date: September 12, 2026
+
+Tests:
+
+84 passed
+
+Alembic current:
+
+6a91d4e7c2b0 (head)
+
+Alembic heads:
+
+6a91d4e7c2b0 (head)
+
+Migration heads:
+
+1
+
+Alembic schema check:
+
+No new upgrade operations detected.
+
+Git:
+
+7959630 fix: align models with database schema
+
+Remote:
+
+origin/dev synchronized
+
+Working tree:
+
+clean
+
+Current next milestone:
+
+Comprehensive V1 tests
+
+The project is now a durable asynchronous social-media publishing backend
+with AI-assisted content generation, mandatory Human-in-the-Loop approval,
+platform abstraction, persistent publication state, scheduling, Redis
+processing, retries, stale-job recovery, dead-letter handling, encrypted
+OAuth credentials, standardized API errors, and request-level observability.
+
+The key architectural rule remains:
+
+AI can generate and recommend.
+
+A human must approve before externally visible publication.

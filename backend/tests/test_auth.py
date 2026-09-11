@@ -24,7 +24,7 @@ async def test_login_returns_access_token(client, test_user):
 
 @pytest.mark.asyncio
 async def test_login_rejects_invalid_password(client, test_user):
-    """An incorrect password should be rejected."""
+    """An incorrect password should be rejected with a standard error."""
 
     response = await client.post(
         "/auth/login",
@@ -35,16 +35,25 @@ async def test_login_rejects_invalid_password(client, test_user):
     )
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid email or password"
+
+    data = response.json()
+
+    assert data["error"]["code"] == "UNAUTHORIZED"
+    assert data["error"]["message"] == "Invalid email or password"
 
 
 @pytest.mark.asyncio
 async def test_me_requires_authentication(client):
-    """The /auth/me endpoint should require a valid JWT."""
+    """The /auth/me endpoint should require authentication."""
 
     response = await client.get("/auth/me")
 
     assert response.status_code == 401
+
+    data = response.json()
+
+    assert data["error"]["code"] == "UNAUTHORIZED"
+    assert data["error"]["message"] == "Not authenticated"
 
 
 @pytest.mark.asyncio

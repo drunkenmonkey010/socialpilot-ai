@@ -1,5 +1,14 @@
-from fastapi import FastAPI
+import logging
 
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
+
+from app.api.errors import (
+    http_exception_handler,
+    unhandled_exception_handler,
+    validation_exception_handler,
+)
+from app.api.middleware import request_logging_middleware
 from app.api.routes.auth import router as auth_router
 from app.api.routes.brand import router as brand_router
 from app.api.routes.campaign import router as campaign_router
@@ -9,12 +18,38 @@ from app.api.routes.post import router as post_router
 from app.api.routes.social_account import router as social_account_router
 from app.api.routes.user import router as user_router
 from app.core.config import settings
+from app.core.logging import configure_logging
+
+
+configure_logging()
 
 
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="Agentic AI social media management platform.",
+)
+
+app.state.logger = logging.getLogger("socialpilot.api")
+
+app.middleware("http")(
+    request_logging_middleware,
+)
+
+
+app.add_exception_handler(
+    HTTPException,
+    http_exception_handler,
+)
+
+app.add_exception_handler(
+    RequestValidationError,
+    validation_exception_handler,
+)
+
+app.add_exception_handler(
+    Exception,
+    unhandled_exception_handler,
 )
 
 

@@ -19,12 +19,13 @@ class Base(DeclarativeBase):
 
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=False,
     pool_pre_ping=True,
     connect_args={
         "ssl": "require",
     },
 )
+
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
@@ -35,5 +36,6 @@ AsyncSessionLocal = async_sessionmaker(
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Provide a database session to FastAPI dependencies."""
+
     async with AsyncSessionLocal() as session:
         yield session

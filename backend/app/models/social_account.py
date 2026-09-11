@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.encryption import EncryptedToken
 
 
 class SocialAccount(Base):
@@ -36,12 +37,12 @@ class SocialAccount(Base):
     )
 
     access_token: Mapped[str] = mapped_column(
-        Text,
+        EncryptedToken(),
         nullable=False,
     )
 
     refresh_token: Mapped[str | None] = mapped_column(
-        Text,
+        EncryptedToken(),
         nullable=True,
     )
 

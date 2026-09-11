@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -52,7 +53,42 @@ class FakeReconcilablePublisher:
         )
 
 
-async def _create_publishing_post(db):
+class FailingReconcilablePublisher:
+    platform = "fake_reconcile_failure"
+
+    def __init__(self):
+        self.publish_calls = 0
+        self.reconcile_calls = 0
+
+    async def reconcile(
+        self,
+        account,
+        content,
+        publication_key,
+    ):
+        self.reconcile_calls += 1
+
+        raise RuntimeError(
+            "simulated reconciliation outage"
+        )
+
+    async def publish(
+        self,
+        account,
+        content,
+        publication_key=None,
+    ):
+        self.publish_calls += 1
+
+        raise AssertionError(
+            "publish() must NOT be called after reconciliation failure."
+        )
+
+
+async def _create_publishing_post(
+    db,
+    platform="fake_reconcile",
+):
     unique_id = uuid.uuid4().hex
 
     user = User(
@@ -79,7 +115,7 @@ async def _create_publishing_post(db):
     post = Post(
         campaign_id=campaign.id,
         content="Recovery reconciliation test post",
-        platform="fake_reconcile",
+        platform=platform,
         status=PostStatus.PUBLISHING.value,
         publication_key=f"socialpilot:recovery:test:{unique_id}",
         publication_attempts=1,
@@ -90,6 +126,22 @@ async def _create_publishing_post(db):
     await db.refresh(post)
 
     return post, user.id
+
+
+async def _delete_post(
+    post_id: int,
+    user_id: int,
+):
+    async with AsyncSessionLocal() as db:
+        refreshed_post = await PostService.get_post(
+            db,
+            post_id,
+            user_id,
+        )
+
+        if refreshed_post is not None:
+            await db.delete(refreshed_post)
+            await db.commit()
 
 
 @pytest.mark.asyncio
@@ -152,6 +204,57 @@ async def test_recovery_reconciles_missing_redis_job_without_republishing():
         assert publisher.publish_calls == 0
 
     finally:
+        await _delete_post(
+            post.id,
+            user_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_requeue_when_reconciliation_fails():
+    """
+    Safety scenario:
+
+        External publication state is ambiguous
+        -> reconciliation fails
+        -> recovery must NOT assume "not found"
+        -> no Redis job is created
+        -> post remains PUBLISHING
+        -> publication is not duplicated.
+    """
+
+    publisher = FailingReconcilablePublisher()
+
+    fake_account = object()
+    enqueue_job = AsyncMock()
+
+    async with AsyncSessionLocal() as db:
+        post, user_id = await _create_publishing_post(
+            db,
+            platform="fake_reconcile_failure",
+        )
+
+    try:
+        with patch(
+            "app.services.publication.PublicationService.get_publisher",
+            return_value=publisher,
+        ), patch(
+            "app.services.publication.PublicationService.get_social_account",
+            new=AsyncMock(return_value=fake_account),
+        ), patch(
+            "app.worker.recovery.PostRepository.get_publishing_posts",
+            new=AsyncMock(
+                return_value=[(post, user_id)]
+            ),
+        ), patch(
+            "app.worker.recovery.redis_queue.has_scheduled_post_job",
+            new=AsyncMock(return_value=False),
+        ), patch(
+            "app.worker.recovery.redis_queue.enqueue_scheduled_post",
+            new=enqueue_job,
+        ):
+            await recover_jobs()
+
         async with AsyncSessionLocal() as db:
             refreshed_post = await PostService.get_post(
                 db,
@@ -159,6 +262,88 @@ async def test_recovery_reconciles_missing_redis_job_without_republishing():
                 user_id,
             )
 
-            if refreshed_post is not None:
-                await db.delete(refreshed_post)
-                await db.commit()
+            assert refreshed_post is not None
+            assert refreshed_post.status == PostStatus.PUBLISHING.value
+
+        assert publisher.reconcile_calls == 1
+        assert publisher.publish_calls == 0
+        enqueue_job.assert_not_awaited()
+
+    finally:
+        await _delete_post(
+            post.id,
+            user_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_stale_processing_job_is_not_recovered_when_reconciliation_fails():
+    """
+    A stale Redis processing job must remain untouched when external
+    publication state cannot be reconciled.
+    """
+
+    publisher = FailingReconcilablePublisher()
+
+    fake_account = object()
+    recover_job = AsyncMock()
+
+    old_claimed_at = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=600)
+    ).isoformat()
+
+    async with AsyncSessionLocal() as db:
+        post, user_id = await _create_publishing_post(
+            db,
+            platform="fake_reconcile_failure",
+        )
+
+    try:
+        stale_job = {
+            "job_id": f"scheduled:{post.id}:{uuid.uuid4().hex}",
+            "post_id": post.id,
+            "user_id": user_id,
+            "claimed_at": old_claimed_at,
+            "attempts": 1,
+        }
+
+        with patch(
+            "app.services.publication.PublicationService.get_publisher",
+            return_value=publisher,
+        ), patch(
+            "app.services.publication.PublicationService.get_social_account",
+            new=AsyncMock(return_value=fake_account),
+        ), patch(
+            "app.worker.recovery.redis_queue.get_processing_jobs",
+            new=AsyncMock(
+                return_value=[stale_job]
+            ),
+        ), patch(
+            "app.worker.recovery.redis_queue.recover_scheduled_post",
+            new=recover_job,
+        ), patch(
+            "app.worker.recovery.PostRepository.get_publishing_posts",
+            new=AsyncMock(return_value=[]),
+        ):
+            await recover_jobs()
+
+        async with AsyncSessionLocal() as db:
+            refreshed_post = await PostService.get_post(
+                db,
+                post.id,
+                user_id,
+            )
+
+            assert refreshed_post is not None
+            assert refreshed_post.status == PostStatus.PUBLISHING.value
+
+        assert publisher.reconcile_calls == 1
+        assert publisher.publish_calls == 0
+        recover_job.assert_not_awaited()
+
+    finally:
+        await _delete_post(
+            post.id,
+            user_id,
+        )

@@ -24,15 +24,28 @@ STALE_AFTER_SECONDS = 300
 async def reconcile_publishing_post(
     post_id: int,
     user_id: int,
-) -> bool:
+) -> bool | None:
     """
     Attempt to reconcile an ambiguous PUBLISHING post.
 
-    Returns True when the external publication was found and
-    persisted as PUBLISHED.
+    Returns:
 
-    Returns False when reconciliation is unsupported or the
-    publication was not found.
+        True:
+            External publication was found and persisted as PUBLISHED.
+
+        False:
+            Reconciliation completed successfully, but no external
+            publication was found or reconciliation is unsupported.
+
+        None:
+            Reconciliation could not be completed because an error
+            occurred.
+
+    None is intentionally different from False.
+
+    A reconciliation error means the external publication state is
+    unknown. Recovery must not interpret that state as permission to
+    create another publication attempt.
     """
 
     async with AsyncSessionLocal() as db:
@@ -67,7 +80,11 @@ async def reconcile_publishing_post(
                 post.platform,
             )
 
-            return False
+            # The external publication state is unknown.
+            #
+            # Do not allow recovery to interpret this as
+            # "publication not found" and republish.
+            return None
 
         if result.found and result.external_post_id:
             logger.warning(
@@ -88,6 +105,10 @@ async def recover_stale_processing_jobs() -> None:
     Recover Redis processing jobs whose worker lease has gone stale.
 
     PostgreSQL remains the source of truth for the post lifecycle.
+
+    Reconciliation is attempted before allowing another publication
+    attempt. If reconciliation fails, the job is left in processing
+    rather than being requeued into another external publication attempt.
     """
 
     processing_jobs = await redis_queue.get_processing_jobs()
@@ -215,6 +236,16 @@ async def recover_stale_processing_jobs() -> None:
             user_id,
         )
 
+        if reconciled is None:
+            logger.error(
+                "Leaving stale Redis job untouched because publication "
+                "reconciliation failed: job_id=%s post_id=%s user_id=%s",
+                job_id,
+                post_id,
+                user_id,
+            )
+            continue
+
         if reconciled:
             await redis_queue.acknowledge_scheduled_post(
                 job_id=job_id,
@@ -243,6 +274,10 @@ async def recover_missing_redis_jobs() -> None:
     Before creating a new Redis job, reconciliation is attempted so
     a successful external publication whose response was lost does
     not automatically become a duplicate publication.
+
+    If reconciliation fails, the post is left in PUBLISHING without
+    creating a new Redis job. The next recovery cycle can retry
+    reconciliation.
     """
 
     async with AsyncSessionLocal() as db:
@@ -274,6 +309,15 @@ async def recover_missing_redis_jobs() -> None:
                 post.id,
                 user_id,
             )
+
+            if reconciled is None:
+                logger.error(
+                    "Not creating Redis recovery job because publication "
+                    "reconciliation failed: post_id=%s user_id=%s",
+                    post.id,
+                    user_id,
+                )
+                continue
 
             if reconciled:
                 continue

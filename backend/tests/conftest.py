@@ -6,6 +6,7 @@ from sqlalchemy import delete
 
 from app.core.database import AsyncSessionLocal, engine
 from app.core.security import hash_password
+from app.integrations.queue.redis import redis_queue
 from app.main import app
 from app.models.user import User
 
@@ -54,4 +55,25 @@ async def test_user():
         )
         await session.commit()
 
+
+@pytest_asyncio.fixture(autouse=True)
+async def dispose_test_resources():
+    """
+    Dispose shared async resources after every test.
+
+    pytest-asyncio may create a separate event loop for each async test.
+    SQLAlchemy and redis-py can retain connections associated with the
+    previous loop, which can cause:
+
+        RuntimeError: Event loop is closed
+
+    Closing both shared clients after every test prevents connections
+    from leaking across pytest event loops.
+
+    This fixture is test-only. Production resource lifecycle is unchanged.
+    """
+
+    yield
+
     await engine.dispose()
+    await redis_queue.close()

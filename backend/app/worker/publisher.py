@@ -60,6 +60,43 @@ async def mark_post_failed(
             )
 
 
+async def move_job_to_dlq(
+    job_id: str,
+    failure_type: str,
+    error: str,
+) -> bool:
+    """
+    Move a terminal publishing job into the Redis DLQ.
+
+    The job remains in processing if the DLQ move fails, preventing
+    the worker from acknowledging and silently losing the job.
+    """
+
+    moved = await redis_queue.move_to_dead_letter(
+        job_id=job_id,
+        failure_type=failure_type,
+        error=str(error),
+    )
+
+    if not moved:
+        logger.error(
+            "Failed to move terminal publishing job to DLQ: "
+            "job_id=%s failure_type=%s",
+            job_id,
+            failure_type,
+        )
+        return False
+
+    logger.error(
+        "Publishing job moved to DLQ: "
+        "job_id=%s failure_type=%s",
+        job_id,
+        failure_type,
+    )
+
+    return True
+
+
 async def process_job(
     job: dict,
 ) -> bool:
@@ -175,6 +212,18 @@ async def process_job(
                     exc,
                 )
 
+                post.status = PostStatus.FAILED.value
+                await db.commit()
+
+                moved = await move_job_to_dlq(
+                    job_id=job_id,
+                    failure_type="permanent_failure",
+                    error=str(exc),
+                )
+
+                if not moved:
+                    return False
+
                 return True
 
             if attempts >= retry_policy.max_attempts:
@@ -189,6 +238,15 @@ async def process_job(
                 post.status = PostStatus.FAILED.value
 
                 await db.commit()
+
+                moved = await move_job_to_dlq(
+                    job_id=job_id,
+                    failure_type="retry_exhausted",
+                    error=str(exc),
+                )
+
+                if not moved:
+                    return False
 
                 return True
 

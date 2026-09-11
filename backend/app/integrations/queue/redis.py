@@ -19,6 +19,9 @@ SCHEDULED_POST_PROCESSING_QUEUE = (
 SCHEDULED_POST_DELAYED_QUEUE = (
     "socialpilot:scheduled_posts:delayed"
 )
+SCHEDULED_POST_DLQ = (
+    "socialpilot:scheduled_posts:dead_letter"
+)
 
 
 class RedisQueue:
@@ -28,11 +31,13 @@ class RedisQueue:
         queue_name: str = SCHEDULED_POST_QUEUE,
         processing_queue_name: str = SCHEDULED_POST_PROCESSING_QUEUE,
         delayed_queue_name: str = SCHEDULED_POST_DELAYED_QUEUE,
+        dlq_queue_name: str = SCHEDULED_POST_DLQ,
     ):
         self.redis_url = redis_url
         self.queue_name = queue_name
         self.processing_queue_name = processing_queue_name
         self.delayed_queue_name = delayed_queue_name
+        self.dlq_queue_name = dlq_queue_name
 
         self.client = redis.from_url(
             self.redis_url,
@@ -132,6 +137,8 @@ class RedisQueue:
             processing
                 ↓
             delayed retry
+                ↓
+            dead letter queue
 
         Recovery must not create another job if one already exists.
         """
@@ -178,6 +185,20 @@ class RedisQueue:
             ):
                 return True
 
+        dlq_jobs = await self.client.lrange(
+            self.dlq_queue_name,
+            0,
+            -1,
+        )
+
+        for raw_job in dlq_jobs:
+            if self._job_matches(
+                raw_job,
+                post_id,
+                user_id,
+            ):
+                return True
+
         return False
 
     async def enqueue_scheduled_post(
@@ -193,9 +214,6 @@ class RedisQueue:
 
         If job_id is supplied, the existing identity is preserved.
         Otherwise a new UUID is generated.
-
-        Returns:
-            The Redis job ID.
         """
 
         job = self._create_job(
@@ -265,12 +283,7 @@ class RedisQueue:
         self,
         job_id: str,
     ) -> bool:
-        """
-        Acknowledge a specific processing job by job_id.
-
-        Using job_id avoids accidentally acknowledging another job
-        belonging to the same post.
-        """
+        """Acknowledge a specific processing job by job_id."""
 
         processing_jobs = await self.client.lrange(
             self.processing_queue_name,
@@ -322,11 +335,7 @@ class RedisQueue:
         attempts: int,
         next_retry_at: datetime | None,
     ) -> bool:
-        """
-        Move a failed processing job into the delayed retry queue.
-
-        The same job_id is preserved.
-        """
+        """Move a failed processing job into the delayed retry queue."""
 
         processing_jobs = await self.client.lrange(
             self.processing_queue_name,
@@ -393,16 +402,137 @@ class RedisQueue:
 
         return False
 
+    async def move_to_dead_letter(
+        self,
+        job_id: str,
+        failure_type: str,
+        error: str,
+    ) -> bool:
+        """
+        Move a specific processing job into the dead-letter queue.
+
+        The original job_id is preserved.
+
+        The move is performed conditionally by a Redis Lua script so
+        the job is only added to the DLQ if it was actually removed
+        from the processing queue.
+        """
+
+        processing_jobs = await self.client.lrange(
+            self.processing_queue_name,
+            0,
+            -1,
+        )
+
+        for raw_job in processing_jobs:
+            job = self._parse_job(raw_job)
+
+            if job is None:
+                continue
+
+            if job.get("job_id") != job_id:
+                continue
+
+            job["failure_type"] = failure_type
+            job["error"] = error
+            job["failed_at"] = datetime.now(
+                timezone.utc,
+            ).isoformat()
+            job["next_retry_at"] = None
+
+            dlq_job = json.dumps(job)
+
+            script = """
+            local removed = redis.call(
+                'LREM',
+                KEYS[1],
+                1,
+                ARGV[1]
+            )
+
+            if removed == 0 then
+                return 0
+            end
+
+            redis.call(
+                'RPUSH',
+                KEYS[2],
+                ARGV[2]
+            )
+
+            return 1
+            """
+
+            result = await self.client.eval(
+                script,
+                2,
+                self.processing_queue_name,
+                self.dlq_queue_name,
+                raw_job,
+                dlq_job,
+            )
+
+            return bool(result)
+
+        return False
+
+    async def get_dead_letter_jobs(
+        self,
+    ) -> list[dict[str, Any]]:
+        """Return all jobs currently in the dead-letter queue."""
+
+        raw_jobs = await self.client.lrange(
+            self.dlq_queue_name,
+            0,
+            -1,
+        )
+
+        jobs = []
+
+        for raw_job in raw_jobs:
+            job = self._parse_job(raw_job)
+
+            if job is None:
+                continue
+
+            jobs.append(job)
+
+        return jobs
+
+    async def acknowledge_dead_letter_job(
+        self,
+        job_id: str,
+    ) -> bool:
+        """Remove a specific job from the dead-letter queue."""
+
+        dlq_jobs = await self.client.lrange(
+            self.dlq_queue_name,
+            0,
+            -1,
+        )
+
+        for raw_job in dlq_jobs:
+            if not self._job_id_matches(
+                raw_job,
+                job_id,
+            ):
+                continue
+
+            removed = await self.client.lrem(
+                self.dlq_queue_name,
+                1,
+                raw_job,
+            )
+
+            return removed > 0
+
+        return False
+
     async def promote_due_retries(
         self,
         limit: int = 100,
     ) -> int:
-        """
-        Move delayed retry jobs whose retry time has arrived
-        into the main scheduled-post queue.
-
-        The same job_id is preserved.
-        """
+        """Move due delayed retry jobs into the main queue."""
 
         now_timestamp = datetime.now(
             timezone.utc,
@@ -458,9 +588,7 @@ class RedisQueue:
     async def get_delayed_jobs(
         self,
     ) -> list[dict[str, Any]]:
-        """
-        Return all jobs currently waiting in the delayed retry queue.
-        """
+        """Return all jobs currently waiting in delayed retry."""
 
         raw_jobs = await self.client.zrange(
             self.delayed_queue_name,
@@ -485,14 +613,7 @@ class RedisQueue:
         job_id: str,
         stale_after_seconds: int = 300,
     ) -> bool:
-        """
-        Recover one specific stale processing job.
-
-        The same job_id is preserved.
-
-        The caller is responsible for checking PostgreSQL state
-        before calling this method.
-        """
+        """Recover one specific stale processing job."""
 
         processing_jobs = await self.client.lrange(
             self.processing_queue_name,

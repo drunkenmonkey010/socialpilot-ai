@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -11,15 +19,23 @@ class Campaign(Base):
 
     __tablename__ = "campaigns"
 
+    __table_args__ = (
+        Index(
+            "idx_campaigns_brand_id",
+            "brand_id",
+        ),
+    )
+
     id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
         autoincrement=True,
     )
 
     brand_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("brands.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
 
     name: Mapped[str] = mapped_column(

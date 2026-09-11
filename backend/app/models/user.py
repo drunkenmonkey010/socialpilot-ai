@@ -1,15 +1,18 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
 
 class User(Base):
+    """Application user."""
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
         autoincrement=True,
     )
@@ -17,7 +20,6 @@ class User(Base):
     email: Mapped[str] = mapped_column(
         String(255),
         unique=True,
-        index=True,
         nullable=False,
     )
 

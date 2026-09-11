@@ -31,6 +31,7 @@ class Post(Base):
     )
 
     campaign_id: Mapped[int] = mapped_column(
+        Integer,
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

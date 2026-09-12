@@ -1,10 +1,9 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     ForeignKey,
-    Index,
+    Integer,
     String,
     Text,
     func,
@@ -19,23 +18,17 @@ class Campaign(Base):
 
     __tablename__ = "campaigns"
 
-    __table_args__ = (
-        Index(
-            "idx_campaigns_brand_id",
-            "brand_id",
-        ),
-    )
-
     id: Mapped[int] = mapped_column(
-        BigInteger,
+        Integer,
         primary_key=True,
         autoincrement=True,
     )
 
     brand_id: Mapped[int] = mapped_column(
-        BigInteger,
+        Integer,
         ForeignKey("brands.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
 
     name: Mapped[str] = mapped_column(

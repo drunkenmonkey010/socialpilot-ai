@@ -1,4 +1,4 @@
-from functools import lru_cache
+﻿from functools import lru_cache
 from pathlib import Path
 
 from pydantic import field_validator
@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://socialpilot:password@localhost:5433/socialpilot"
     )
+    database_ssl_mode: str = "disable"
 
     # ============================================================
     # Redis
@@ -135,6 +136,20 @@ class Settings(BaseSettings):
         if not value or not value.strip():
             raise ValueError(
                 "TOKEN_ENCRYPTION_KEY must be configured."
+            )
+
+        return value
+
+    @field_validator("database_ssl_mode")
+    @classmethod
+    def validate_database_ssl_mode(cls, value: str) -> str:
+        """Allow only supported PostgreSQL SSL modes."""
+
+        allowed = {"disable", "require"}
+
+        if value not in allowed:
+            raise ValueError(
+                "DATABASE_SSL_MODE must be either 'disable' or 'require'."
             )
 
         return value

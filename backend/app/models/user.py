@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, String, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -11,15 +11,22 @@ class User(Base):
 
     __tablename__ = "users"
 
+    __table_args__ = (
+        Index(
+            "ix_users_email",
+            "email",
+            unique=True,
+        ),
+    )
+
     id: Mapped[int] = mapped_column(
-        BigInteger,
+        Integer,
         primary_key=True,
         autoincrement=True,
     )
 
     email: Mapped[str] = mapped_column(
         String(255),
-        unique=True,
         nullable=False,
     )
 

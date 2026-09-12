@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator
+﻿from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -12,18 +12,20 @@ from app.core.config import settings
 
 
 class Base(DeclarativeBase):
-    """Base class for all SQLAlchemy models."""
-
     pass
+
+
+connect_args: dict[str, object] = {}
+
+if settings.database_ssl_mode == "require":
+    connect_args["ssl"] = "require"
 
 
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
     echo=False,
     pool_pre_ping=True,
-    connect_args={
-        "ssl": "require",
-    },
+    connect_args=connect_args,
 )
 
 
@@ -35,7 +37,5 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Provide a database session to FastAPI dependencies."""
-
     async with AsyncSessionLocal() as session:
         yield session

@@ -31,6 +31,39 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: socialpilot-api:0.1.0
+    container_name: socialpilot-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://socialpilot:password@postgres:5432/socialpilot
+      DATABASE_SSL_MODE: disable
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
 volumes:
   postgres_data:
   redis_data:

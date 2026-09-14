@@ -4227,3 +4227,461 @@ The key architectural rule remains:
 AI can generate and recommend.
 
 A human must approve before externally visible publication.
+
+
+86. Authoritative V1 deployment update — September 12, 2026
+
+The project has now reached a working Docker Compose deployment baseline for the V1 backend.
+
+Deployment goal
+
+Package and run the SocialPilot AI backend together with PostgreSQL and Redis in a reproducible containerized environment.
+
+Deployment architecture
+
+Docker Compose
+├── PostgreSQL
+├── Redis
+└── SocialPilot API
+      ↓
+   FastAPI
+      ↓
+   PostgreSQL + Redis
+
+The internal architecture remains:
+
+FastAPI routes
+↓
+Services
+↓
+Repositories
+↓
+SQLAlchemy models
+↓
+PostgreSQL
+
+External platform integrations remain isolated:
+
+Application
+↓
+PlatformRegistry
+↓
+PlatformPublisher
+├── MastodonAdapter
+└── InstagramAdapter
+
+Human-in-the-Loop remains mandatory:
+
+AI generation
+↓
+DRAFT
+↓
+PENDING_REVIEW
+↓
+HUMAN APPROVAL
+↓
+APPROVED
+↓
+SCHEDULED / PUBLISHING
+↓
+PUBLISHED
+
+AI is not permitted to silently approve or publish content.
+
+Files added
+
+backend/Dockerfile
+backend/.dockerignore
+
+Files changed for deployment/configuration
+
+backend/app/core/config.py
+backend/app/core/database.py
+backend/app/models/brand.py
+backend/app/models/campaign.py
+backend/app/models/user.py
+backend/requirements.txt
+docker-compose.yml
+
+Dockerfile
+
+The backend image uses Python 3.12 slim, installs the pinned requirements, copies the application and Alembic migrations, exposes port 8000, provides a /health container healthcheck, and starts Uvicorn on 0.0.0.0:8000.
+
+The .dockerignore excludes virtual environments, Python caches, test files, local environment files, Git/editor metadata, logs, and temporary inspection files. This prevents local development artifacts and secrets from being copied into the image.
+
+Compose services
+
+PostgreSQL uses:
+
+pgvector/pgvector:pg16
+
+Redis uses:
+
+redis:7-alpine
+
+The API uses:
+
+socialpilot-api:0.1.0
+
+Host mappings:
+
+PostgreSQL → localhost:5433
+Redis → localhost:6379
+API → localhost:8000
+
+Database configuration decision
+
+Database SSL configuration was made environment-aware.
+
+DATABASE_SSL_MODE supports:
+
+disable
+require
+
+Local Docker PostgreSQL uses:
+
+DATABASE_SSL_MODE=disable
+
+Hosted/Supabase PostgreSQL can use:
+
+DATABASE_SSL_MODE=require
+
+This removes the previous hardcoded hosted-database SSL assumption from local development.
+
+Clean-build dependency discovery
+
+A clean Docker build exposed a dependency that existed in the local virtual environment but was missing from requirements.txt:
+
+PyJWT==2.10.1
+
+The dependency was added to backend/requirements.txt.
+
+This confirms the value of container builds as an independent dependency check: the image must declare everything it needs rather than relying on packages installed locally.
+
+Docker deployment verification
+
+The Docker image built successfully.
+
+The Compose stack was started successfully after resolving an existing manual API container name conflict.
+
+Verified healthy services:
+
+socialpilot-api
+socialpilot-postgres
+socialpilot-redis
+
+Readiness verification
+
+GET /ready returned:
+
+{
+  "status": "ready",
+  "service": "SocialPilot AI",
+  "checks": {
+    "database": "ready",
+    "redis": "ready"
+  }
+}
+
+This proves that the running API container can communicate with both required infrastructure services.
+
+Alembic verification inside the container
+
+The running API container was checked with:
+
+alembic current
+
+Result:
+
+6a91d4e7c2b0 (head)
+
+The migration graph was also checked with:
+
+alembic check
+
+Result:
+
+No new upgrade operations detected.
+
+The containerized database schema is therefore aligned with the current migration/model state.
+
+Health model
+
+/health
+→ liveness
+
+/ready
+→ database + Redis readiness
+
+/version
+→ application version
+
+The container healthcheck uses /health, while readiness verifies required infrastructure dependencies.
+
+Security considerations
+
+The Docker image does not copy .env into the image. The .dockerignore explicitly excludes .env and .env.*.
+
+Secrets are injected through Compose environment configuration rather than baked into application source or the container image.
+
+Important production warning:
+
+A previous docker compose config output exposed sensitive environment values in terminal output. Those credentials must be treated as exposed and rotated before production use.
+
+Expanded docker compose config output containing secrets must not be pasted into public repositories, issue trackers, screenshots, or documentation.
+
+Known deployment limitations
+
+This Compose setup is a V1 deployment/development baseline, not a complete production orchestration platform.
+
+Remaining production deployment concerns include:
+
+- production secret management
+- HTTPS/reverse proxy configuration
+- database backup/restore strategy
+- worker process scaling
+- monitoring and alerting
+- resource limits
+- production Redis availability/persistence strategy
+- CI/CD
+- image vulnerability scanning
+- production environment configuration
+- credential rotation
+
+These concerns are intentionally deferred until the V1 backend baseline is stable.
+
+V1 verification baseline
+
+The comprehensive automated V1 test suite has reached:
+
+165 passing tests
+
+Deployment verification was then performed independently through Docker Compose.
+
+Deployment definition of done
+
+The deployment milestone follows:
+
+Implementation
+↓
+Import/unit validation
+↓
+API validation
+↓
+Database validation
+↓
+External integration validation
+↓
+Failure-path testing
+↓
+Security review
+↓
+Documentation update
+↓
+Git checkpoint
+
+The deployment milestone additionally verifies:
+
+Clean container build
+↓
+Compose startup
+↓
+Container health
+↓
+Application readiness
+↓
+Alembic migration state
+
+Git checkpoint — containerized V1 backend
+
+The intended deployment checkpoint contains:
+
+backend/.dockerignore
+backend/Dockerfile
+backend/app/core/config.py
+backend/app/core/database.py
+backend/app/models/brand.py
+backend/app/models/campaign.py
+backend/app/models/user.py
+backend/requirements.txt
+docker-compose.yml
+
+Recommended commit message:
+
+feat: containerize V1 backend
+
+The checkpoint is not considered confirmed until the commit exists, the branch is pushed, and git status reports a clean working tree.
+
+Current authoritative V1 roadmap
+
+Completed:
+
+1. Publishing idempotency
+2. Persistent publication/audit state
+3. Multi-platform publication architecture
+4. Instagram adapter/OAuth
+5. Scheduling hardening
+6. DLQ/failure management
+7. Security hardening
+8. API error standardization
+9. Observability
+10. DB migrations/Alembic verification
+11. Comprehensive V1 tests — 165 passing
+12. Health/readiness/version/API cleanup
+13. Docker/Compose deployment baseline
+
+Deferred:
+
+- X integration during development because of API cost/access considerations
+- Instagram media publishing until media support exists in the Post/publication workflow
+- frontend review UI
+- frontend scheduling/calendar UI
+- analytics
+- autonomous posting
+- advanced agentic workflow
+
+The Human-in-the-Loop boundary remains mandatory.
+
+Current authoritative architecture
+
+Campaign
+↓
+AI generation
+↓
+DRAFT
+↓
+PENDING_REVIEW
+↓
+HUMAN APPROVAL
+↓
+APPROVED
+↓
+SCHEDULED
+↓
+PostgreSQL source of truth
+↓
+Atomic claim
+↓
+Redis scheduled queue
+↓
+Redis processing queue
+↓
+Publisher worker
+↓
+PublicationService
+↓
+PlatformRegistry
+↓
+Platform Adapter
+├── Mastodon
+└── Instagram
+↓
+PUBLISHED
+
+Failure path:
+
+Publisher
+↓
+retryable failure
+↓
+RetryPolicy
+↓
+delayed queue
+↓
+retry promoter
+↓
+Redis queue
+↓
+publisher
+
+Permanent/exhausted path:
+
+Publisher
+↓
+permanent failure / retry exhaustion
+↓
+FAILED
+↓
+dead-letter queue
+
+Recovery remains conservative and database-aware.
+
+Final current status — September 12, 2026
+
+Authentication                         ✅ VERIFIED
+User/brand/campaign ownership           ✅ VERIFIED
+Post lifecycle                          ✅ VERIFIED
+Human-in-the-Loop approval              ✅ VERIFIED
+AI generation                           ✅ VERIFIED
+Mastodon OAuth                          ✅ VERIFIED
+Mastodon publication                    ✅ VERIFIED
+Scheduled publishing                    ✅ VERIFIED
+Redis queue/recovery                    ✅ VERIFIED
+Retry/backoff/jitter                    ✅ VERIFIED
+Publishing idempotency                  ✅ COMPLETED
+Durable publication state               ✅ COMPLETED
+Generic platform architecture           ✅ VERIFIED
+Instagram OAuth                         ✅ VERIFIED
+Instagram account persistence           ✅ VERIFIED
+DLQ/failure management                  ✅ COMPLETED
+Security hardening                      ✅ COMPLETED
+API error standardization               ✅ COMPLETED
+Observability                           ✅ COMPLETED
+Alembic/model alignment                 ✅ VERIFIED
+Comprehensive V1 tests                  ✅ 165 PASSING
+Health/readiness/version                ✅ VERIFIED
+Docker/Compose deployment               ✅ VERIFIED
+Instagram text publishing               ⏳ MEDIA REQUIRED
+Frontend review UI                      ⏳
+Frontend scheduling UI                  ⏳
+Analytics                               ⏳
+Advanced agents                         ⏳
+
+Latest verified deployment checkpoint
+
+September 12, 2026
+
+Docker Compose successfully runs the API, PostgreSQL, and Redis services.
+
+All three containers report healthy.
+
+The deployed API reports database and Redis readiness.
+
+Alembic reports:
+
+6a91d4e7c2b0 (head)
+
+and:
+
+No new upgrade operations detected.
+
+The V1 backend is therefore containerized and operational as a reproducible local deployment baseline.
+
+Next development checkpoint
+
+1. Commit the deployment checkpoint.
+2. Push the checkpoint to origin/dev.
+3. Verify a clean Git working tree.
+4. Preserve this documentation as the authoritative project history.
+5. Begin the next approved milestone only after the deployment checkpoint is confirmed.
+
+The project should not expand into X, analytics, autonomous posting, or frontend feature work until the agreed V1 reliability and architecture boundaries remain stable.
+
+Living-document rule
+
+After every major milestone, append:
+
+- what was implemented
+- files changed
+- architecture decisions
+- problems encountered
+- exact resolution
+- tests performed
+- failure cases considered
+- security implications
+- known limitations
+- Git checkpoint
+- updated project status
+- next recommended milestone
+
+Historical sections must remain intact. New information should be appended as an authoritative update rather than rewriting earlier development history.
